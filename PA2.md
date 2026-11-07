@@ -37,7 +37,7 @@ arrived through a pull request.
 | Rules file                          | [`CLAUDE.md`](CLAUDE.md)                                                                                                                                                       |
 | Permissions (allowed / ask / never) | [`docs/PERMISSIONS.md`](docs/PERMISSIONS.md), enforced in [`.claude/settings.json`](.claude/settings.json)                                                                     |
 | Env variables, no values            | [`.env.example`](.env.example)                                                                                                                                                 |
-| Model and spending cap              | [`README.md`](README.md#model-and-spending-cap)                                                                                                                                |
+| Model                               | [`README.md`](README.md#model)                                                                                                                                                 |
 | One command per check               | [`README.md`](README.md#checks--one-command-each-the-same-locally-and-in-ci), [`.github/workflows/ci.yml`](.github/workflows/ci.yml)                                           |
 | Contract                            | [`docs/contract/publish.md`](docs/contract/publish.md) — `POST /v1/labs/{labId}/publish`                                                                                       |
 | Contract tests                      | [`test/contract/publish.contract.test.ts`](test/contract/publish.contract.test.ts), [`test/contract/conventions.contract.test.ts`](test/contract/conventions.contract.test.ts) |

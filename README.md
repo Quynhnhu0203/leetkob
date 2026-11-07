@@ -44,16 +44,16 @@ Copy `.env.example` to `.env` and fill it in. `.env` is git-ignored; `.env.examp
 variable with no value. No secret is in the repository or its history; the `secrets` CI job scans
 the whole history with gitleaks on every PR.
 
-## Model and spending cap
+## Model
 
-- **Provider and model:** Google Gemini API, free tier, model `gemini-2.5-flash` (set in
-  `GEMINI_MODEL`). Used from PA#3 for the semantic constraints only.
-- **Spending cap:** the API key belongs to a Google AI Studio project **with no billing account
-  attached**, so it can only use the free quota and cannot be charged: the cap is 0 VND. When the
-  quota runs out, calls fail with 429 and the checker returns `unsure`, which goes to the TA's queue.
-  In addition the app stops calling the model for a lab after `LLM_MAX_CALLS_PER_LAB` calls (PA#3).
-- **Cost of one lab:** 0 VND on the free tier. Expected volume ≈ 80 submissions × the number of
-  semantic constraints; measured and reported in `AI-LOG.md` once PA#3 runs a real lab.
+- **Provider and model:** Google Gemini API, free tier, model `gemini-3.8-flash` (set in
+  `GEMINI_MODEL`; fallback `gemini-3.6-flash`). Used from PA#3 for the semantic constraints only.
+  The final choice is made on the dev set in PA#4.
+- **Limits:** when the quota runs out, calls fail with 429 and the checker returns `unsure`, which
+  goes to the TA's queue. The app stops calling the model for a lab after `LLM_MAX_CALLS_PER_LAB`
+  calls (PA#3).
+- **Cost of one lab:** not measured yet. Expected volume ≈ 80 submissions × the number of semantic
+  constraints; measured and reported in `AI-LOG.md` once PA#3 runs a real lab.
 - No test calls the model; unit and contract tests run offline.
 
 ## Working with the assistant

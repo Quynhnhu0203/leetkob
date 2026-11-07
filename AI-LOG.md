@@ -93,4 +93,6 @@ the red commit `4d32388` and the green commit `0194202` both stay in `main`'s hi
 
 - Every line of `CLAUDE.md` and `docs/contract/publish.md` against the brief §3–§4 and the rubric.
 - That `npm run check` is green on a fresh clone with no `.env`.
-- That the free-tier Gemini project has no billing account attached (README "spending cap").
+- The Gemini model and its free-tier status on the official pricing page (2026-11-07):
+  `gemini-2.5-flash`, our first choice, is deprecated and reroutes to `gemini-3.5-flash-lite` from
+  2026-12-01, so the README now names `gemini-3.8-flash`.
