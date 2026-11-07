@@ -1,6 +1,6 @@
 # PA#2 — Harness and quality gate
 
-Team: 23120068 Nguyễn Lê Minh Nhật · 23120069 Nguyễn Trần Quỳnh Như · 23120078 Đặng Mai Quốc
+Team: 23120068 Lê Nguyễn Minh Nhật · 23120069 Nguyễn Trần Quỳnh Như · 23120078 Đặng Mai Quốc
 
 ## Links
 
