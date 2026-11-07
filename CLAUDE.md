@@ -36,6 +36,11 @@ Same commands locally and in CI (`.github/workflows/ci.yml`). Run all before say
   drops its methods and the test passes for the wrong reason. (AI-LOG #2.)
 - Edit source with the editor tool, not `sed`/`python` string replacement: escapes such as `\b`
   and `\d` get mangled. (AI-LOG #1: a leak-check regex silently lost its escapes.)
+- Branch naming: use `feature/<description>`, `fix/<description>`, `test/<description>`, `docs/<description>`, or `chore/<description>`.
+- Commit messages: use `<type>: <short description>` with types such as `feat`, `fix`, `test`, `docs`, `refactor`, and `chore`.
+- Pull requests: keep one logical change per PR; describe the change, tests run, and any contract impact.
+- Contract changes: update `docs/contract/` before implementation and clearly mention the contract change in the PR.
+- Before merge: run `npm run check` locally and ensure all required CI checks are green.
 
 ## Never
 
