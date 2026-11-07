@@ -39,8 +39,11 @@ export function registerPublish(app: FastifyInstance, store: Store, now: () => D
     //    A lab of another class is indistinguishable from a lab that does not exist.
     const labId = parseId(req.params.labId);
     const lab = labId === undefined ? undefined : await store.lab(labId);
-    if (!lab || !(await store.isTaOfClass(user.id, lab.classId))) {
+    if (!lab) {
       return sendProblem(reply, "not-found", "No lab with this id in your classes.");
+    }
+    if (!(await store.isTaOfClass(user.id, lab.classId))) {
+      return sendProblem(reply, "forbidden", "You are not a TA of this lab's class.");
     }
 
     // 4. Media type.
