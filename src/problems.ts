@@ -9,6 +9,7 @@ export const PROBLEMS = {
   "not-found": { status: 404, title: "Not found" },
   "unsupported-media-type": { status: 415, title: "Unsupported media type" },
   "invalid-json": { status: 400, title: "Malformed JSON" },
+  "payload-too-large": { status: 413, title: "Payload too large" },
   validation: { status: 400, title: "Invalid request" },
   "lab-still-open": { status: 409, title: "Lab still open" },
   "reviews-pending": { status: 409, title: "Reviews pending" },
