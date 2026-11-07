@@ -2,15 +2,16 @@
 
 ## Tools
 
-| Tool                                     | Used for                                                                                                                               |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Claude Code (Claude Opus 5.5) in VS Code | Read the brief and the rubric; scaffold; `CLAUDE.md`; permissions; contract; contract tests; CI; README; drafts of PA2.md and this log |
-| GitHub CLI (`gh`), run by us             | Creating the public repo, pull requests, merges, the `pa2` tag                                                                         |
-| GitHub web UI, by us                     | Branch protection on `main` and its screenshot                                                                                         |
-| Google Gemini                            | Not used yet. The app's model from PA#3 (free tier, see README)                                                                        |
+| Tool                                                                | Used for                                                                                                                               |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code (Claude Opus 5.5) in VS Code                            | Read the brief and the rubric; scaffold; `CLAUDE.md`; permissions; contract; contract tests; CI; README; drafts of PA2.md and this log |
+| GitHub CLI (`gh`), run by the assistant after we approved each step | Creating the public repo, pushing branches, opening PRs, the `pa2` tag (it was refused a merge: #6)                                    |
+| GitHub web UI, by us                                                | Branch protection on `main` and its screenshots; **every merge** into `main`                                                           |
+| Google Gemini                                                       | Not used yet. The app's model from PA#3 (free tier, see README)                                                                        |
 
 Decisions we made, not the assistant: endpoint = `POST /labs/{labId}/publish`; stack =
-TypeScript/Node; model = Gemini.
+TypeScript/Node; model = Gemini. The team conventions in `CLAUDE.md` (branch and commit naming,
+one change per PR, contract changes called out, check before merge) are ours, added in PR #5.
 
 ## Changed / Rejected
 
@@ -89,10 +90,41 @@ the red commit `4d32388` and the green commit `0194202` both stay in `main`'s hi
   and the merge was blocked
   ([run](https://github.com/Quynhnhu0203/leetkob/actions/runs/42363793011)). PR closed unmerged.
 
+### #8 — "A fresh clone is green" was false on Windows (Changed)
+
+Reviewing for the rubric line "a fresh clone that follows the README gets them green", the
+assistant cloned the tagged repo into an empty folder on our Windows machine and ran `npm ci` and
+`npm run check`. `format:check` failed on **all 24 files**. Git for Windows defaults to
+`core.autocrlf=true`, so the clone had CRLF line endings, and Prettier expects LF. Our own working
+copy never showed it because the repo had `core.autocrlf=false` set locally from the first commit,
+and CI runs on Linux. Fixed in PR #6 with `.gitattributes` (`* text=auto eol=lf`), verified by a new
+clone with `core.autocrlf=true`. The same PR untracked a `desktop.ini` that Windows had dropped into
+`docs/img/` and we had committed. `CLAUDE.md` now says how to check a fresh clone.
+
+### #9 — The contract's `Location` pointed nowhere (Changed)
+
+Re-reading the contract as a stranger would: `201` and `200` sent
+`Location: /v1/labs/{labId}/publication`, but no such endpoint existed, so a client that followed
+it got `404`. A body over Fastify's size limit also fell through to `500 internal`, an error the
+contract never names. We fixed both in PR #7 in the order `CLAUDE.md` asks: contract first
+(`86cde20`, §4.3 step 0 `413 payload-too-large`, §4.8 `GET …/publication`), then the tests, red
+(`b5d49aa`, 5 failing), then the code (`b7818bd`). Three mutations of the new code were each caught.
+In that PR the assistant again edited `src/problems.ts` with a Python replacement, against the rule
+from #1; the line had no escapes and the tests confirmed it, but the rule was broken.
+
+### #10 — A spending-cap claim written before it was true (Changed)
+
+The assistant's README said the key's project had no billing account and the cap was 0 VND before
+we had created a key at all. We removed the claim (PR #8), created the key in an AI Studio project
+with no billing account, checked it in AI Studio on 2026-11-07, and only then put the sentence back
+with that date.
+
 ## What we checked ourselves
 
 - Every line of `CLAUDE.md` and `docs/contract/publish.md` against the brief §3–§4 and the rubric.
-- That `npm run check` is green on a fresh clone with no `.env`.
+- That `npm run check` is green on a fresh clone with no `.env`, on Windows with
+  `core.autocrlf=true` (after #8).
+- That the Gemini key's project has no billing account attached (AI Studio, 2026-11-07).
 - The Gemini model and its free-tier status on the official pricing page (2026-11-07):
   `gemini-2.5-flash`, our first choice, is deprecated and reroutes to `gemini-3.5-flash-lite` from
   2026-12-01, so the README now names `gemini-3.8-flash`.

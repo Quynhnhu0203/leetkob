@@ -41,6 +41,8 @@ Same commands locally and in CI (`.github/workflows/ci.yml`). Run all before say
 - Pull requests: keep one logical change per PR; describe the change, tests run, and any contract impact.
 - Contract changes: update `docs/contract/` before implementation and clearly mention the contract change in the PR.
 - Before merge: run `npm run check` locally and ensure all required CI checks are green.
+- Keep `.gitattributes` (`eol=lf`). Before claiming "a fresh clone is green", clone it on Windows
+  with `core.autocrlf=true` and run `npm run check`. (AI-LOG #8: format check failed on all 24 files.)
 
 ## Never
 
