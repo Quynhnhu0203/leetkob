@@ -98,6 +98,7 @@ const TITLES: Record<string, [number, string]> = {
   validation: [400, "Invalid request"],
   "lab-still-open": [409, "Lab still open"],
   "reviews-pending": [409, "Reviews pending"],
+  "payload-too-large": [413, "Payload too large"],
   internal: [500, "Internal error"],
 };
 const ALLOWED_MEMBERS = [
@@ -303,6 +304,73 @@ describe("§2 / §4.3 each error type", () => {
     });
     const problem = expectProblem(res, "internal");
     expect(problem.detail).not.toMatch(/SELECT|connection/);
+  });
+});
+
+describe("§4.3 step 0: body size", () => {
+  const padded = (size: number): string => {
+    const json = JSON.stringify({ confirm: true });
+    return json + " ".repeat(size - json.length);
+  };
+
+  it("a body of exactly 1024 bytes is accepted", async () => {
+    expect((await publish({ body: padded(1024) })).statusCode).toBe(201);
+  });
+
+  it("413 payload-too-large at 1025 bytes, and nothing is published", async () => {
+    expectProblem(await publish({ body: padded(1025) }), "payload-too-large");
+    expect(await store.publication(7)).toBeUndefined();
+  });
+
+  it("413 comes before authentication", async () => {
+    expectProblem(await publish({ token: null, body: padded(5000) }), "payload-too-large");
+  });
+});
+
+describe("§4.8 GET /v1/labs/{labId}/publication", () => {
+  const read = (labId: number | string, token: string | null = TOKENS.ta12) =>
+    app.inject({
+      method: "GET",
+      url: `/v1/labs/${labId}/publication`,
+      headers: token === null ? {} : { authorization: `Bearer ${token}` },
+    });
+
+  it("200 with the body the publish 201 returned, at the Location it gave", async () => {
+    const created = await publish();
+    const location = created.headers.location as string;
+    const res = await app.inject({
+      method: "GET",
+      url: location,
+      headers: { authorization: `Bearer ${TOKENS.ta12}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/^application\/json/);
+    expect(res.json()).toEqual(created.json());
+  });
+
+  it("404 not-found when the lab is not published yet", async () => {
+    expectProblem(await read(7), "not-found");
+  });
+
+  it("401 unauthenticated without a token", async () => {
+    expectProblem(await read(7, null), "unauthenticated");
+  });
+
+  it("403 forbidden for a student", async () => {
+    expectProblem(await read(7, TOKENS.student), "forbidden");
+  });
+
+  it("ownership: another class's published lab is 404, identical to a missing lab", async () => {
+    await publish({ token: TOKENS.ta20, labId: 30 });
+    const other = await read(30);
+    const missing = await read(999);
+    expectProblem(other, "not-found");
+    expect(other.body).toBe(missing.body);
+  });
+
+  it("reading changes nothing: a later publish is still the first 201", async () => {
+    await read(7);
+    expect((await publish()).statusCode).toBe(201);
   });
 });
 
