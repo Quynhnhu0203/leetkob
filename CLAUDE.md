@@ -30,6 +30,8 @@ Same commands locally and in CI (`.github/workflows/ci.yml`). Run all before say
   stack trace, SQL, a path, a token or another user's data.
 - A lab of another class answers `404 not-found`, identical to a missing lab — never `403`.
 - Branch from `main`, open a PR, merge only when every required check is green. No direct push.
+- Commit as `Quynhnhu0203` (repo-local git config). No AI attribution: no `Co-Authored-By` or
+  "author by" trailer in commits, no "Generated with Claude Code" line in PR descriptions or comments.
 - A new test must be seen failing once: break the code on purpose, watch it go red, restore.
   (AI-LOG #3: a test was written that could never fail.)
 - To inject a fault, subclass `InMemoryStore`; never `{ ...store }` — spreading a class instance
