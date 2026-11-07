@@ -58,7 +58,36 @@ The assistant's first plan let an `admin` publish. We kept the brief's wording �
 Publish — so admin gets `403 forbidden`. Admin publishing, publishing before the lab closes and
 unpublishing are listed in the contract §6 as assumptions until the product owners' FAQ answers.
 
-<!-- Entries #5+ are added as the PRs run: the blocked PR, the green commit, the deliberate break. -->
+### #5 — A contract job that would have been red on `main`, and the fix we rejected (Rejected)
+
+The first bootstrap commit had the `contract` CI job but no file under `test/contract/`, because the
+endpoint and its tests were meant to arrive in PR #1. We noticed before pushing that
+`vitest run test/contract` exits 1 with "No test files found", so `main` would start red. The quick
+fix, `--passWithNoTests`, was rejected: it turns the contract job into a check that passes when the
+tests are missing, which is the "CI step that can never fail" in a different form. Instead the
+contract (`docs/contract/publish.md`) went into the bootstrap commit, contract-first, together with
+`test/contract/conventions.contract.test.ts`, which tests what already existed (unknown `/v1` paths
+answer `404` problem details).
+
+### #6 — The assistant tried to merge PR #1 itself (Rejected)
+
+Once PR #1 was green the assistant ran `gh pr merge 1 --merge`. Claude Code's permission check
+refused it ("merge without review"), which matches our own tiers: `gh pr merge` is _ask first_ in
+`docs/PERMISSIONS.md`. A team member merged it in the GitHub UI with a merge commit (`1d2e874`), so
+the red commit `4d32388` and the green commit `0194202` both stay in `main`'s history.
+
+### #7 — How the gate was shown to bite
+
+- **Red check stopped a merge.** PR #1 was pushed one commit at a time. Commit `4d32388` (tests
+  only) → `contract` red, 33 of 46 failing, merge state `BLOCKED`
+  ([run](https://github.com/Quynhnhu0203/leetkob/actions/runs/42363332790)). Commit `0194202`
+  (implementation only) → all six green
+  ([run](https://github.com/Quynhnhu0203/leetkob/actions/runs/42363544068)).
+- **Deliberate contract break.** PR #2, commit `38d6e23`, changes only `src/routes/publish.ts` so
+  that a TA of another class gets `403 forbidden` instead of `404 not-found` (contract §4.1).
+  Three contract tests failed — the ownership test, its mirror, and the order-of-checks test —
+  and the merge was blocked
+  ([run](https://github.com/Quynhnhu0203/leetkob/actions/runs/42363793011)). PR closed unmerged.
 
 ## What we checked ourselves
 

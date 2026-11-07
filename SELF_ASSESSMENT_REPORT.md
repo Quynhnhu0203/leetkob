@@ -1,0 +1,30 @@
+# Self-assessment — PA#2
+
+Submitted by:
+
+- 23120068 — Nguyễn Lê Minh Nhật
+- 23120069 — Nguyễn Trần Quỳnh Như
+- 23120078 — Đặng Mai Quốc
+
+Total we claim: 98 / 100 (zip name: 23120068-23120069-23120078_98.zip)
+
+| Criterion                           | Max | We claim | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------------- | --- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1. Rules file                       | 15  | 14       | `CLAUDE.md`: four sections (stack, commands, conventions, never), 50 lines. Never list is LeeTKOB-specific: no secret in the sandbox, no real model call in tests, never edit a test / eval data / label / contract to pass, model never decides a deduction, no student identity to the model. Three conventions trace to AI-LOG #1, #2, #3 (what went wrong while building this checkpoint)                                  |
+| 2. Permissions and secrets          | 10  | 10       | Three tiers in `docs/PERMISSIONS.md`, enforced in `.claude/settings.json` (and it did bite: AI-LOG #6). `.env.example` lists every variable without values; `.env` git-ignored. `secrets` CI job runs gitleaks over the full history on every PR: "no leaks found" ([run](https://github.com/Quynhnhu0203/leetkob/actions/runs/42362531421)). README "Model and spending cap": Gemini free tier, no billing account, cap 0 VND |
+| 3. One command for every check      | 10  | 10       | README table: `npm run lint`, `npm run format:check`, `npm run typecheck`, `npm test`, `npm run test:contract` (+ `npm run check` for all). `.github/workflows/ci.yml` runs exactly these, one job each. Fresh clone + `npm ci` + `npm run check` is green with no `.env`                                                                                                                                                      |
+| 4. CI that blocks a merge           | 20  | 20       | `main` protected, six required checks, admins included (PA2.md, API read-back, `docs/img/`). Blocked PR #1 at `4d32388` ([red run](https://github.com/Quynhnhu0203/leetkob/actions/runs/42363332790), `BLOCKED`), turned green by `0194202` ([green run](https://github.com/Quynhnhu0203/leetkob/actions/runs/42363544068)). No direct push to `main` after `f8c2067`                                                          |
+| 5. Contract of one LeeTKOB endpoint | 25  | 24       | `docs/contract/publish.md` (`POST /v1/labs/{labId}/publish`), same sections as IA#3 CONTRACT.md: who may call it (role `ta` + must teach the lab's class; other class = 404 identical to missing), request field rules, ordered checks, nine problem types with status/title/extension, idempotency and concurrency (exactly one 201, then 200 replays), what changes after publishing, open questions for the product owners  |
+| 6. Contract tests that bite         | 15  | 15       | `test/contract/` — 46 tests: every problem type with full RFC 9457 shape, ownership both directions, order of checks, replay body/headers, concurrent publish. Run in the required `contract` job. Deliberate break: PR #2, commit `38d6e23` (403 instead of 404), [red run](https://github.com/Quynhnhu0203/leetkob/actions/runs/42363793011), closed unmerged. Five local mutations caught (AI-LOG #3)                       |
+| 7. AI-LOG.md                        | 5   | 5        | `AI-LOG.md`: tools and what each did; Changed/Rejected entries #1–#7, including a check that could not fail (#3), the rejected `--passWithNoTests` (#5) and a regex that went silently wrong while every check stayed green (#1)                                                                                                                                                                                               |
+| **Total**                           | 100 | **98**   |                                                                                                                                                                                                                                                                                                                                                                                                                                |
+
+## What we did not manage
+
+- The product owners' FAQ has no answers yet on admin publishing, publishing before the lab
+  closes, or unpublishing; the contract §6 states our assumptions instead of citing FAQ entries.
+- The store is in-memory. Atomic publishing is guaranteed by the event loop today; the database
+  version (PA#3) must keep it with a conditional update, and the same contract tests must pass.
+- No model is called yet, so the per-lab cost in the README is an estimate (0 VND on the free
+  tier), not a measurement.
+- The secret scan runs only in CI; there is no local pre-commit hook for it.
