@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { sendProblem } from "./problems.js";
+import { registerPublish } from "./routes/publish.js";
 import type { Store } from "./store.js";
 
 export interface AppOptions {
@@ -8,14 +9,19 @@ export interface AppOptions {
   logger?: boolean;
 }
 
-// `store` and `now` are wired into the routes as they are added (first one: publish).
-export function buildApp({ logger = false }: AppOptions): FastifyInstance {
+export function buildApp({
+  store,
+  now = () => new Date(),
+  logger = false,
+}: AppOptions): FastifyInstance {
   const app = Fastify({ logger });
 
   // Keep the raw body; each route parses it itself so that the order of checks
   // in the contract (auth before body) holds.
   app.removeAllContentTypeParsers();
   app.addContentTypeParser("*", { parseAs: "string" }, (_req, body, done) => done(null, body));
+
+  registerPublish(app, store, now);
 
   app.setNotFoundHandler((_req, reply) => sendProblem(reply, "not-found", "No such resource."));
 
