@@ -54,6 +54,7 @@ Content-Type: application/problem+json
 | `not-found`              | 404    | Not found                 | no lab with that id, the id is not a valid id, **or the lab belongs to a class the TA does not teach**, or no such `/v1` path | —                                                                    |
 | `unsupported-media-type` | 415    | Unsupported media type    | `Content-Type` is missing or is not `application/json` (parameters such as `charset` are allowed)                             | —                                                                    |
 | `invalid-json`           | 400    | Malformed JSON            | the body is not valid JSON (an empty body included)                                                                           | —                                                                    |
+| `payload-too-large`      | 413    | Payload too large         | the body is longer than 1024 bytes                                                                                            | —                                                                    |
 | `validation`             | 400    | Invalid request           | the body breaks a rule in §4.2                                                                                                | `errors`: one `{ "pointer", "detail" }` per problem found            |
 | `lab-still-open`         | 409    | Lab still open            | the lab's submission window has not closed yet                                                                                | `closesAt`: when it closes                                           |
 | `reviews-pending`        | 409    | Reviews pending           | at least one verdict in the lab's review queue has not been reviewed by a TA                                                  | `pendingReviews`: integer ≥ 1                                        |
@@ -111,12 +112,15 @@ Body:
 | (body)    | a JSON object; anything else (array, string, `null`, number) is `validation` with pointer `""`           |
 | `confirm` | required, the boolean `true`. Missing, `false`, `"true"` or `1` are `validation` with pointer `/confirm` |
 
-`confirm` exists so that an empty or accidental request cannot release marks.
+`confirm` exists so that an empty or accidental request cannot release marks. The whole body is
+at most 1024 bytes.
 
 ### 4.3 Order of checks
 
 The server checks in this order and **stops at the first step that fails**:
 
+0. The body is at most 1024 bytes, else `413 payload-too-large`. The server reads the body before
+   anything else, so this step comes even before authentication; it reveals nothing about labs.
 1. Authenticated, else `401 unauthenticated`.
 2. Role is `ta`, else `403 forbidden`.
 3. `labId` is a valid id, the lab exists and the TA teaches its class, else `404 not-found`.
@@ -199,6 +203,18 @@ Content-Type: application/json; charset=utf-8
 
 { "labId": 7, "status": "published", "publishedAt": "2026-11-11T14:00:00.000Z", "publishedBy": 12, "submissionCount": 80 }
 ```
+
+### 4.8 `GET /v1/labs/{labId}/publication` — the resource `Location` points to
+
+A client that lost the response to its publish, or that only wants to know whether a lab is
+published, reads the Publication here. It changes nothing.
+
+- **Who may call it:** the same as §4.1 — role `ta`, teaching the lab's class.
+- **Request:** `Authorization: Bearer <token>`; no body.
+- **Checks, in order:** `401 unauthenticated` → `403 forbidden` → `404 not-found` (as in §4.3
+  steps 1–3: missing lab, invalid id or another class's lab, identical bodies) → `404 not-found`
+  when the lab exists but is **not published yet**.
+- **`200`:** the stored Publication, the same body the publish `201` returned.
 
 ## 5. Versions and changes
 

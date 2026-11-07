@@ -26,6 +26,10 @@ export function buildApp({
   app.setNotFoundHandler((_req, reply) => sendProblem(reply, "not-found", "No such resource."));
 
   app.setErrorHandler((err, req, reply) => {
+    // Contract §4.3 step 0: Fastify rejects an over-limit body before the handler runs.
+    if ((err as { code?: string }).code === "FST_ERR_CTP_BODY_TOO_LARGE") {
+      return sendProblem(reply, "payload-too-large", "The request body is too large.");
+    }
     req.log.error(err);
     return sendProblem(reply, "internal", "Something went wrong on our side.");
   });
