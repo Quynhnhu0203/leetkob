@@ -49,6 +49,10 @@ the whole history with gitleaks on every PR.
 - **Provider and model:** Google Gemini API, free tier, model `gemini-3.8-flash` (set in
   `GEMINI_MODEL`; fallback `gemini-3.6-flash`). Used from PA#3 for the semantic constraints only.
   The final choice is made on the dev set in PA#4.
+- **Spending cap:** the key belongs to a Google AI Studio project with **no billing account
+  attached** (checked in AI Studio on 2026-11-07), so it can only use free-tier quota and cannot
+  incur charges: the cap is 0 VND. Enabling billing on that project is a team decision that must
+  update this line first.
 - **Limits:** when the quota runs out, calls fail with 429 and the checker returns `unsure`, which
   goes to the TA's queue. The app stops calling the model for a lab after `LLM_MAX_CALLS_PER_LAB`
   calls (PA#3).
