@@ -32,15 +32,15 @@ export function stripCodeForModel(sourceCode: string): string {
         break;
       } else if (line[i] === '"' || line[i] === "'") {
         // String literal: preserve it, but check for student id patterns
-        const quote = line[i];
+        const quote = line[i] ?? "";
         cleanLine += quote;
         i++;
         while (i < line.length && line[i] !== quote) {
           if (line[i] === "\\" && i + 1 < line.length) {
-            cleanLine += line[i] + line[i + 1];
+            cleanLine += (line[i] ?? "") + (line[i + 1] ?? "");
             i += 2;
           } else {
-            cleanLine += line[i];
+            cleanLine += line[i] ?? "";
             i++;
           }
         }
@@ -62,4 +62,3 @@ export function stripCodeForModel(sourceCode: string): string {
 
   return result.join("\n");
 }
-

@@ -133,4 +133,3 @@ int main() {
     expect(fakeClient.getCallLog().length).toBe(0);
   });
 });
-

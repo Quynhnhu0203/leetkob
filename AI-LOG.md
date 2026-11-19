@@ -128,3 +128,36 @@ with that date.
 - The Gemini model and its free-tier status on the official pricing page (2026-11-07):
   `gemini-2.5-flash`, our first choice, is deprecated and reroutes to `gemini-3.5-flash-lite` from
   2026-12-01, so the README now names `gemini-3.8-flash`.
+
+## PA#3 — Prototype with the LLM feature running
+
+### Tools
+
+| Tool                                   | Used for                                                                                                                                                                                   |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Claude Code / Antigravity              | Architecture, Queue & Worker implementation, syntax-aware hard rules, Gemini model client, prompt stripper, limits guardrails, checker CLI, Dockerfiles, test suite, and PA3 documentation |
+| Google Gemini API (`gemini-3.8-flash`) | Semantic constraint reviews on dev set; real dev-set run committed with provider request ids, token counts, and cost                                                                       |
+| Docker                                 | Building and validating hardened sandbox image (`Dockerfile.sandbox`) and checker image (`Dockerfile.checker`)                                                                             |
+| Git & GitHub Actions CI                | Committing one part per commit, verifying CI workflows and branch protection on `main` and `pa*` tags                                                                                      |
+
+### Changed / Rejected
+
+### #11 — AST syntax-aware parser vs. regex on comments/strings/namespaces (Changed)
+
+The assistant's initial draft checked ban lists using regex searches for `\bstd::sort\b`. On `sort-merge/s03.cpp` (which has `// de bai cam dung std::sort nen tu viet ham sort rieng`), the regex matched the comment and predicted a violation, causing a wrongful deduction. It also triggered on string literals like `"std::sort is not allowed"`. We rejected the regex approach and replaced it with a syntax-aware C++ scanner (`src/reviewer/hard-rules.ts`). The scanner strips comments and string literals, tracks 1-based original line numbers, checks scope and namespaces (`using namespace std` vs `namespace my { void sort() }`), and recognizes student-defined functions. Running against the dev set produced 0 wrongful deductions.
+
+### #12 — Memory limit attack compiler optimization elimination (Changed)
+
+In `attack-4-memory.cpp`, the initial version allocated a 512 MiB vector `std::vector<char> v(512 * 1024 * 1024);` but never read from it. Under `g++ -O2`, the compiler can eliminate unused allocations or avoid touching virtual pages, allowing the process to terminate without exceeding the 256 MiB memory limit. We caught this from the rubric requirement ("the test reads back the memory it allocates, so the compiler cannot remove the allocation") and updated the attack code to step through memory every 4096 bytes: `for (size_t i = 0; i < sz; i += 4096) sum += mem[i]; std::cout << sum;`. This forces physical allocation and guarantees kernel OOM killer (exit 137) terminates the container.
+
+### #13 — Rejection of hardcoded dev-set problem IDs in prompt and rules (Rejected)
+
+The assistant drafted a prompt builder that included the dev-set problem name (`sort-merge`). We rejected this: the rubric explicitly warns against prompts or rules that name dev-set problems or quote dev-set code ("tuned to the dev set; it will not survive new problems"). The prompt builder (`src/model/prompt.ts`) and checker CLI (`src/checker-cli.ts`) were rewritten to work strictly from `statement.md` and `constraints.json` without any hardcoded problem IDs.
+
+### #14 — Worker queue exactly-once judging idempotency (Changed)
+
+When testing the worker restart requirement ("stop the worker, submit, start the worker again"), re-enqueuing an existing submission caused duplicate review items to be inserted into `reviewItems`. We modified `store.setSubmissionJudged` to be an atomic check-and-set operation: if `sub.status === 'judged'`, judging is skipped and no duplicate review items are added. This guarantees that stopping and restarting the worker judges each submission exactly once.
+
+### #15 — Prettier formatting modifying dev set file hashes (Changed)
+
+Running `npm run format` initially reformatted `eval/eval.mjs`, changing its byte-for-byte SHA-256 hash. The rubric verifies `eval.mjs starts c836edd8713521bb, labels.jsonl starts 262cda7b0ef5612e`. We immediately restored the published copy and added `eval`, `eval-own`, and `leetkob-eval` to `.prettierignore` and `eslint.config.js`. Verified by calculating SHA-256 on disk matching published upstream.

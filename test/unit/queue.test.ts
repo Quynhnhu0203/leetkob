@@ -148,4 +148,3 @@ describe("Queue and Worker — judged exactly once", () => {
     expect(queueItems.length).toBe(0);
   });
 });
-

@@ -39,7 +39,7 @@ interface Token {
   type: "ident" | "keyword" | "punct" | "macro" | "using_std";
   value: string;
   line: number;
-  prefix?: string; // e.g. "std::", "my::"
+  prefix?: string | undefined; // e.g. "std::", "my::"
 }
 
 /**

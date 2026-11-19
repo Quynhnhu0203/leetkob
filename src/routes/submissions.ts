@@ -141,4 +141,3 @@ export function registerSubmissionRoutes(
     return reply.code(200).send(sub);
   });
 }
-

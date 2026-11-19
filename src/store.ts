@@ -8,8 +8,8 @@ export interface User {
 export interface Lab {
   id: number;
   classId: number;
-  name?: string;
-  statement?: string;
+  name?: string | undefined;
+  statement?: string | undefined;
   /** After this instant no submission is accepted. */
   closesAt: Date;
 }

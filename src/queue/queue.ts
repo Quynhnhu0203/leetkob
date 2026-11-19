@@ -60,4 +60,3 @@ export class InMemorySubmissionQueue implements SubmissionQueue {
     return Promise.resolve(this.jobs.filter((j) => j.status === "queued").length);
   }
 }
-

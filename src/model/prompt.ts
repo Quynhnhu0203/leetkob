@@ -46,4 +46,3 @@ ${strippedCode}
 - DO NOT set or suggest any grade, points or deduction. The TA sets that.
 - Output ONLY valid JSON, with no markdown code blocks and no conversational prose.`;
 }
-

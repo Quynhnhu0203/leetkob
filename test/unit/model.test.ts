@@ -82,4 +82,3 @@ describe("Model Call Log and Cost Arithmetic", () => {
     expect(log[0]?.parsedOutput?.verdict).toBe("pass");
   });
 });
-

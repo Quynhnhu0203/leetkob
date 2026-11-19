@@ -86,16 +86,16 @@ export class OfflineFakeModelClient implements ModelClient {
 }
 
 export interface GeminiClientOptions {
-  apiKey?: string;
-  model?: string;
-  logFilePath?: string;
-  timeoutMs?: number;
+  apiKey?: string | undefined;
+  model?: string | undefined;
+  logFilePath?: string | undefined;
+  timeoutMs?: number | undefined;
 }
 
 export class GeminiModelClient implements ModelClient {
   private readonly apiKey: string;
   private readonly model: string;
-  private readonly logFilePath?: string;
+  private readonly logFilePath?: string | undefined;
   private readonly timeoutMs: number;
   private readonly callLog: CallLogEntry[] = [];
 

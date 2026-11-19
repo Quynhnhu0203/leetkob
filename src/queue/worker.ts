@@ -13,16 +13,16 @@ export type ConstraintReviewerFunction = (
 export interface WorkerOptions {
   queue: SubmissionQueue;
   store: Store;
-  judgeFn?: JudgeFunction;
-  reviewerFn?: ConstraintReviewerFunction;
-  pollIntervalMs?: number;
+  judgeFn?: JudgeFunction | undefined;
+  reviewerFn?: ConstraintReviewerFunction | undefined;
+  pollIntervalMs?: number | undefined;
 }
 
 export class JudgeWorker {
   private readonly queue: SubmissionQueue;
   private readonly store: Store;
   private readonly judgeFn: JudgeFunction;
-  private readonly reviewerFn?: ConstraintReviewerFunction;
+  private readonly reviewerFn?: ConstraintReviewerFunction | undefined;
   private readonly pollIntervalMs: number;
 
   private isRunning = false;
