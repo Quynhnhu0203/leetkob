@@ -110,7 +110,16 @@ export class JudgeWorker {
       }
 
       // 3. Atomically save judged status and verdicts
-      const saved = await this.store.setSubmissionJudged(sub.id, judgeRes.verdict, reviewVerdicts);
+      const formattedVerdicts = reviewVerdicts.map((v) => ({
+        ...v,
+        submissionId: sub.id,
+      }));
+
+      const saved = await this.store.setSubmissionJudged(
+        sub.id,
+        judgeRes.verdict,
+        formattedVerdicts,
+      );
 
       await this.queue.markCompleted(job.id);
       return { job, judged: saved };
