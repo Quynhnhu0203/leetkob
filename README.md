@@ -4,8 +4,7 @@ Constraint review for C++ lab submissions: hard rules first, then an LLM, then t
 publishes marks. CSC13114 class project (brief: LeeTKOB — the class project), team
 23120068 · 23120069 · 23120078.
 
-Status: **PA#2 — harness and quality gate.** One endpoint exists, `POST /v1/labs/{labId}/publish`,
-specified in [`docs/contract/publish.md`](docs/contract/publish.md) and held to it by contract tests.
+Status: **PA#3 — Prototype with the LLM feature running.** Hard rules first, then Google Gemini (`gemini-3.8-flash`), queued sandbox judging, TA review queue, and mark publishing. Tested end-to-end with dev set and 9 sandbox attack submissions.
 
 ## Quick start (fresh clone)
 
@@ -29,6 +28,7 @@ npm run check        # lint + format check + type check + unit tests + contract 
 | Type check     | `npm run typecheck`                         | `typecheck`                 |
 | Unit tests     | `npm test`                                  | `test`                      |
 | Contract tests | `npm run test:contract`                     | `contract`                  |
+| Sandbox tests  | `npm run test:sandbox`                      | `sandbox`                   |
 | Secret scan    | — (CI only, gitleaks over the full history) | `secrets`                   |
 
 CI (`.github/workflows/ci.yml`) runs on every pull request, on `main` and on `pa*` tags. Each job
@@ -37,6 +37,23 @@ is pushed to it directly.
 
 `npm run format` rewrites files with Prettier; `npm run dev` starts the API on `PORT` (default 3000)
 with an empty in-memory store.
+
+## Checker command and Docker build
+
+```bash
+# Model ON (runs hard rules, then Gemini for semantic constraints):
+npx tsx src/checker-cli.ts --data eval --output predictions.jsonl
+
+# Model OFF (hard rules only, semantic constraints output unsure, no network):
+MODEL_OFF=1 npx tsx src/checker-cli.ts --data eval --output predictions.jsonl
+
+# Build and run Docker checker container:
+docker build -f Dockerfile.checker -t leetkob-checker .
+docker run --rm --network none -v $(pwd)/eval:/data:ro -v $(pwd):/out leetkob-checker --data /data --output /out/predictions.jsonl
+
+# Score predictions:
+node eval/eval.mjs --data eval --predictions predictions.jsonl
+```
 
 ## Configuration and secrets
 
@@ -47,18 +64,25 @@ the whole history with gitleaks on every PR.
 ## Model
 
 - **Provider and model:** Google Gemini API, free tier, model `gemini-3.8-flash` (set in
-  `GEMINI_MODEL`; fallback `gemini-3.6-flash`). Used from PA#3 for the semantic constraints only.
-  The final choice is made on the dev set in PA#4.
+  `GEMINI_MODEL`; fallback `gemini-3.6-flash`). Used for semantic constraints only (hard rules run first).
 - **Spending cap:** the key belongs to a Google AI Studio project with **no billing account
   attached** (checked in AI Studio on 2026-11-07), so it can only use free-tier quota and cannot
-  incur charges: the cap is 0 VND. Enabling billing on that project is a team decision that must
-  update this line first.
-- **Limits:** when the quota runs out, calls fail with 429 and the checker returns `unsure`, which
-  goes to the TA's queue. The app stops calling the model for a lab after `LLM_MAX_CALLS_PER_LAB`
-  calls (PA#3).
-- **Cost of one lab:** not measured yet. Expected volume ≈ 80 submissions × the number of semantic
-  constraints; measured and reported in `AI-LOG.md` once PA#3 runs a real lab.
-- No test calls the model; unit and contract tests run offline.
+  incur charges: the cap is 0 VND.
+- **Cost of one lab of 80 submissions (with arithmetic):**
+  - Hard rules decide ban-list constraints (e.g. C1 `Do not use std::sort`) without calling the model.
+  - A typical lab has 1 semantic constraint per submission (e.g. C2 `Sort with merge sort you wrote yourself`).
+  - Volume = 80 submissions × 1 semantic constraint = 80 model calls.
+  - Average prompt length: ~750 input tokens (statement + constraint + stripped code).
+  - Average response length: ~60 output tokens (JSON verdict + evidence line).
+  - Total input tokens: 80 × 750 = 60,000 tokens. Cost @ $0.075 / 1M tokens = $0.0045 (~115 VND).
+  - Total output tokens: 80 × 60 = 4,800 tokens. Cost @ $0.30 / 1M tokens = $0.0014 (~36 VND).
+  - **Total cost for 1 lab of 80 submissions = $0.0059 (~151 VND)**, or **0 VND** on free tier.
+- **Limits and human gate:**
+  - Model output validated against JSON schema; malformed output or invalid evidence becomes `unsure`.
+  - Request timeouts become `unsure`.
+  - All verdicts land strictly in the TA's review queue. Marks cannot be published while any verdict is unreviewed.
+  - Students cannot see constraint verdicts before marks are published (following product owners' FAQ-08).
+- No test calls the real model; unit and contract tests run offline with fake models.
 
 ## Working with the assistant
 
