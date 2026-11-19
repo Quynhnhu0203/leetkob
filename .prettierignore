@@ -3,3 +3,6 @@ coverage
 package-lock.json
 *.pdf
 *.png
+eval
+eval-own
+leetkob-eval
