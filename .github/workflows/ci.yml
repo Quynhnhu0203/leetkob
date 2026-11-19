@@ -61,6 +61,18 @@ jobs:
       - run: npm ci
       - run: npm run test:contract
 
+  sandbox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Build sandbox docker image
+        run: docker build -f Dockerfile.sandbox -t leetkob-sandbox:latest .
+      - name: Run sandbox attack test suite
+        run: npm run test:sandbox
+
   secrets:
     runs-on: ubuntu-latest
     steps:
