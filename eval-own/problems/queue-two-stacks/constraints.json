@@ -1,0 +1,13 @@
+[
+  {
+    "id": "C1",
+    "text": "Do not use standard queue containers: `std::queue`, `std::deque`, `std::list`.",
+    "deduction": 3
+  },
+  {
+    "id": "C2",
+    "text": "Implement the queue using exactly two stacks: all enqueue and dequeue operations must be managed by moving elements between these two stacks.",
+    "deduction": 4
+  }
+]
+
