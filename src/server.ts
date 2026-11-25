@@ -69,10 +69,12 @@ const modelClient = process.env.GEMINI_API_KEY
   : new OfflineFakeModelClient();
 
 // Separate background worker judging submissions from the queue
+const labCallCounts = new Map<number, number>();
 const worker = new JudgeWorker({
   queue,
   store,
-  reviewerFn: (code, lab, constraints) => reviewConstraints(code, lab, constraints, modelClient),
+  reviewerFn: (code, lab, constraints) =>
+    reviewConstraints(code, lab, constraints, modelClient, { labCallCounts }),
 });
 worker.start();
 

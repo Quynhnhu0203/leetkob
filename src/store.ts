@@ -40,6 +40,15 @@ export interface EvidenceLine {
   text: string;
 }
 
+export type UnsureReason =
+  | "model_unsure"
+  | "invalid_schema"
+  | "evidence_mismatch"
+  | "timeout"
+  | "cost_cap"
+  | "model_off"
+  | "error";
+
 export interface ReviewItem {
   labId: number;
   submissionId: number;
@@ -48,6 +57,7 @@ export interface ReviewItem {
   evidence: EvidenceLine[];
   deduction: number;
   decidedBy: "hard_rule" | "model" | "ta";
+  unsureReason?: UnsureReason | undefined;
   reviewed: boolean;
   reviewedBy?: number;
   reviewedAt?: string;
@@ -103,12 +113,18 @@ export interface Store {
 
   // Review Queue
   getReviewQueue(labId: number): Promise<ReviewItem[]>;
+  getReviewItem(
+    labId: number,
+    submissionId: number,
+    constraintId: string,
+  ): Promise<ReviewItem | undefined>;
   updateReviewItem(
     labId: number,
     submissionId: number,
     constraintId: string,
-    verdict: "pass" | "violation" | "unsure",
+    verdict: "pass" | "violation",
     reviewedBy: number,
+    evidence?: EvidenceLine[],
   ): Promise<boolean>;
 }
 
@@ -337,12 +353,25 @@ export class InMemoryStore implements Store {
     return Promise.resolve(list.map((r) => ({ ...r })));
   }
 
+  getReviewItem(
+    labId: number,
+    submissionId: number,
+    constraintId: string,
+  ): Promise<ReviewItem | undefined> {
+    const item = this.reviewItems.find(
+      (r) =>
+        r.labId === labId && r.submissionId === submissionId && r.constraintId === constraintId,
+    );
+    return Promise.resolve(item ? { ...item } : undefined);
+  }
+
   updateReviewItem(
     labId: number,
     submissionId: number,
     constraintId: string,
-    verdict: "pass" | "violation" | "unsure",
+    verdict: "pass" | "violation",
     reviewedBy: number,
+    evidence?: EvidenceLine[],
   ): Promise<boolean> {
     const item = this.reviewItems.find(
       (r) =>
@@ -350,6 +379,11 @@ export class InMemoryStore implements Store {
     );
     if (!item) return Promise.resolve(false);
     item.verdict = verdict;
+    if (evidence !== undefined) {
+      item.evidence = evidence;
+    } else if (verdict === "pass") {
+      item.evidence = [];
+    }
     item.reviewed = true;
     item.reviewedBy = reviewedBy;
     item.reviewedAt = new Date().toISOString();

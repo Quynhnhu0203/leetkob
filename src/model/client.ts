@@ -12,10 +12,17 @@ export interface ModelOutput {
   evidence: EvidenceLine[];
 }
 
+export interface CallMetadata {
+  solution?: string | undefined;
+  constraint?: string | undefined;
+}
+
 export interface CallLogEntry {
   timestamp: string;
   requestId: string;
   model: string;
+  solution?: string | undefined;
+  constraint?: string | undefined;
   promptTokens: number;
   candidatesTokens: number;
   totalTokens: number;
@@ -23,11 +30,11 @@ export interface CallLogEntry {
   costUsd: number;
   prompt: string;
   rawResponse: string;
-  parsedOutput?: ModelOutput;
+  parsedOutput?: ModelOutput | undefined;
 }
 
 export interface ModelClient {
-  call(params: ConstraintPromptParams): Promise<ModelOutput>;
+  call(params: ConstraintPromptParams, meta?: CallMetadata): Promise<ModelOutput>;
   getCallLog(): CallLogEntry[];
 }
 
@@ -46,7 +53,7 @@ export class OfflineFakeModelClient implements ModelClient {
     this.defaultResponse = defaultResponse;
   }
 
-  async call(params: ConstraintPromptParams): Promise<ModelOutput> {
+  async call(params: ConstraintPromptParams, meta?: CallMetadata): Promise<ModelOutput> {
     const prompt = buildModelPrompt(params);
     const start = Date.now();
 
@@ -66,6 +73,8 @@ export class OfflineFakeModelClient implements ModelClient {
       timestamp: new Date().toISOString(),
       requestId: `fake-req-${Math.random().toString(36).slice(2, 10)}`,
       model: "offline-fake-model",
+      solution: meta?.solution,
+      constraint: meta?.constraint ?? params.constraint.id,
       promptTokens: Math.ceil(prompt.length / 4),
       candidatesTokens: 25,
       totalTokens: Math.ceil(prompt.length / 4) + 25,
@@ -106,12 +115,19 @@ export class GeminiModelClient implements ModelClient {
     this.timeoutMs = options.timeoutMs ?? 15000;
   }
 
-  async call(params: ConstraintPromptParams): Promise<ModelOutput> {
+  private async appendCallLog(entry: CallLogEntry): Promise<void> {
+    this.callLog.push(entry);
+    if (this.logFilePath) {
+      await fs.mkdir(path.dirname(this.logFilePath), { recursive: true });
+      await fs.appendFile(this.logFilePath, JSON.stringify(entry) + "\n", "utf8");
+    }
+  }
+
+  async call(params: ConstraintPromptParams, meta?: CallMetadata): Promise<ModelOutput> {
     const prompt = buildModelPrompt(params);
     const start = Date.now();
 
     if (!this.apiKey) {
-      // Model-off or no key -> unsure
       return { verdict: "unsure", evidence: [] };
     }
 
@@ -128,7 +144,7 @@ export class GeminiModelClient implements ModelClient {
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
     let rawResponse = "";
-    let requestId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let requestId = "";
     let promptTokens = 0;
     let candidatesTokens = 0;
 
@@ -140,19 +156,49 @@ export class GeminiModelClient implements ModelClient {
         signal: controller.signal,
       });
 
-      const headerReqId = res.headers.get("x-goog-request-id");
-      if (headerReqId) requestId = headerReqId;
+      const headerReqId = res.headers.get("x-goog-request-id") ?? res.headers.get("x-request-id");
+      const rawBodyText = await res.text();
 
-      const data = (await res.json()) as {
+      let data: {
+        responseId?: string;
+        modelVersion?: string;
         candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
         usageMetadata?: {
           promptTokenCount?: number;
           candidatesTokenCount?: number;
           totalTokenCount?: number;
         };
-      };
+      } = {};
+      try {
+        data = JSON.parse(rawBodyText) as typeof data;
+      } catch {
+        rawResponse = rawBodyText;
+      }
 
-      rawResponse = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+      requestId = headerReqId || data.responseId || `http-${res.status}-${Date.now()}`;
+
+      if (!res.ok) {
+        const durationMs = Date.now() - start;
+        const output: ModelOutput = { verdict: "unsure", evidence: [] };
+        await this.appendCallLog({
+          timestamp: new Date().toISOString(),
+          requestId,
+          model: data.modelVersion ?? this.model,
+          solution: meta?.solution,
+          constraint: meta?.constraint ?? params.constraint.id,
+          promptTokens: Math.ceil(prompt.length / 4),
+          candidatesTokens: 0,
+          totalTokens: Math.ceil(prompt.length / 4),
+          durationMs,
+          costUsd: 0,
+          prompt,
+          rawResponse: `HTTP ${res.status}: ${rawBodyText.slice(0, 500)}`,
+          parsedOutput: output,
+        });
+        return output;
+      }
+
+      rawResponse = data.candidates?.[0]?.content?.parts?.[0]?.text ?? rawBodyText;
       promptTokens = data.usageMetadata?.promptTokenCount ?? Math.ceil(prompt.length / 4);
       candidatesTokens =
         data.usageMetadata?.candidatesTokenCount ?? Math.ceil(rawResponse.length / 4);
@@ -164,29 +210,46 @@ export class GeminiModelClient implements ModelClient {
         parsed = null;
       }
 
-      // Schema check
+      // Strict schema validation without silent array coercion
       let output: ModelOutput = { verdict: "unsure", evidence: [] };
+      const isEvidenceList = (arr: unknown[]): arr is EvidenceLine[] =>
+        arr.every(
+          (item) =>
+            typeof item === "object" &&
+            item !== null &&
+            !Array.isArray(item) &&
+            typeof (item as { line?: unknown }).line === "number" &&
+            Number.isInteger((item as { line: number }).line) &&
+            typeof (item as { text?: unknown }).text === "string",
+        );
+
       if (
         typeof parsed === "object" &&
         parsed !== null &&
+        !Array.isArray(parsed) &&
         "verdict" in parsed &&
-        ["pass", "violation", "unsure"].includes((parsed as { verdict: string }).verdict)
+        typeof parsed.verdict === "string" &&
+        ["pass", "violation", "unsure"].includes(parsed.verdict) &&
+        "evidence" in parsed &&
+        Array.isArray(parsed.evidence) &&
+        isEvidenceList(parsed.evidence)
       ) {
-        const p = parsed as { verdict: "pass" | "violation" | "unsure"; evidence?: EvidenceLine[] };
         output = {
-          verdict: p.verdict,
-          evidence: Array.isArray(p.evidence) ? p.evidence : [],
+          verdict: parsed.verdict as "pass" | "violation" | "unsure",
+          evidence: parsed.evidence,
         };
       }
 
       const durationMs = Date.now() - start;
-      // Arithmetic cost calculation: $0.075 / 1M input tokens, $0.30 / 1M output tokens
+      // Cost arithmetic: $0.075 / 1M input tokens, $0.30 / 1M output tokens
       const costUsd = (promptTokens * 0.075) / 1_000_000 + (candidatesTokens * 0.3) / 1_000_000;
 
-      const entry: CallLogEntry = {
+      await this.appendCallLog({
         timestamp: new Date().toISOString(),
         requestId,
-        model: this.model,
+        model: data.modelVersion ?? this.model,
+        solution: meta?.solution,
+        constraint: meta?.constraint ?? params.constraint.id,
         promptTokens,
         candidatesTokens,
         totalTokens: promptTokens + candidatesTokens,
@@ -195,33 +258,27 @@ export class GeminiModelClient implements ModelClient {
         prompt,
         rawResponse,
         parsedOutput: output,
-      };
-
-      this.callLog.push(entry);
-
-      if (this.logFilePath) {
-        await fs.mkdir(path.dirname(this.logFilePath), { recursive: true });
-        await fs.appendFile(this.logFilePath, JSON.stringify(entry) + "\n", "utf8");
-      }
+      });
 
       return output;
-    } catch {
-      // Any timeout, network or parse error becomes unsure
+    } catch (err) {
       const durationMs = Date.now() - start;
-      const entry: CallLogEntry = {
+      const errMsg = err instanceof Error ? err.message : "ERROR / TIMEOUT";
+      await this.appendCallLog({
         timestamp: new Date().toISOString(),
-        requestId,
+        requestId: requestId || `err-${Date.now()}`,
         model: this.model,
+        solution: meta?.solution,
+        constraint: meta?.constraint ?? params.constraint.id,
         promptTokens: Math.ceil(prompt.length / 4),
         candidatesTokens: 0,
         totalTokens: Math.ceil(prompt.length / 4),
         durationMs,
         costUsd: 0,
         prompt,
-        rawResponse: "ERROR / TIMEOUT",
+        rawResponse: `ERROR: ${errMsg}`,
         parsedOutput: { verdict: "unsure", evidence: [] },
-      };
-      this.callLog.push(entry);
+      });
       return { verdict: "unsure", evidence: [] };
     } finally {
       clearTimeout(timeout);

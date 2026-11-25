@@ -172,16 +172,65 @@ export function registerLabRoutes(app: FastifyInstance, store: Store): void {
         return sendProblem(reply, "validation", "Invalid submissionId.");
       }
 
-      let body: { verdict?: "pass" | "violation" | "unsure" };
+      let body: {
+        verdict?: string;
+        evidence?: Array<{ line?: unknown; text?: unknown }>;
+      };
       try {
         const parsed: unknown = JSON.parse(typeof req.body === "string" ? req.body : "{}");
-        body = parsed as { verdict?: "pass" | "violation" | "unsure" };
+        body = parsed as {
+          verdict?: string;
+          evidence?: Array<{ line?: unknown; text?: unknown }>;
+        };
       } catch {
         return sendProblem(reply, "invalid-json", "Malformed JSON body.");
       }
 
-      if (!body.verdict || !["pass", "violation", "unsure"].includes(body.verdict)) {
-        return sendProblem(reply, "validation", "verdict must be pass, violation, or unsure.");
+      // Theo FAQ-09: https://github.com/tkob-team/LeeTKOB-FAQ/blob/main/FAQ.md#faq-09
+      // TA must resolve review items to either "pass" or "violation" (never confirm as "unsure").
+      if (body.verdict !== "pass" && body.verdict !== "violation") {
+        return sendProblem(reply, "validation", "verdict must be pass or violation.");
+      }
+
+      let validEvidence: Array<{ line: number; text: string }> | undefined;
+      if (body.evidence !== undefined) {
+        if (!Array.isArray(body.evidence)) {
+          return sendProblem(reply, "validation", "evidence must be an array.");
+        }
+        validEvidence = [];
+        for (const item of body.evidence) {
+          if (
+            !item ||
+            typeof item !== "object" ||
+            typeof item.line !== "number" ||
+            !Number.isInteger(item.line) ||
+            item.line < 1 ||
+            typeof item.text !== "string"
+          ) {
+            return sendProblem(
+              reply,
+              "validation",
+              "Each evidence entry must have an integer line >= 1 and string text.",
+            );
+          }
+          validEvidence.push({ line: item.line, text: item.text });
+        }
+      }
+
+      const existingItem = await store.getReviewItem(found.lab.id, subId, req.params.constraintId);
+      if (!existingItem) {
+        return sendProblem(reply, "not-found", "Review item not found.");
+      }
+
+      if (body.verdict === "violation") {
+        const effectiveEvidence = validEvidence ?? existingItem.evidence;
+        if (effectiveEvidence.length === 0) {
+          return sendProblem(
+            reply,
+            "validation",
+            "At least one evidence line is required when selecting violation (FAQ-09).",
+          );
+        }
       }
 
       const updated = await store.updateReviewItem(
@@ -190,6 +239,7 @@ export function registerLabRoutes(app: FastifyInstance, store: Store): void {
         req.params.constraintId,
         body.verdict,
         found.user.id,
+        validEvidence,
       );
 
       if (!updated) {
