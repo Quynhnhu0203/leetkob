@@ -107,7 +107,10 @@ describe("End-to-End Flow — Rubric Criterion 1", () => {
       reviewerFn: (code, lab, constraints) => reviewConstraints(code, lab, constraints, fakeModel),
     });
 
-    const app = buildApp({ store, queue, worker });
+    let currentTime = new Date("2026-11-25T10:00:00.000Z");
+    const labDeadline = new Date("2026-11-25T11:00:00.000Z");
+
+    const app = buildApp({ store, queue, now: () => currentTime });
 
     // Step 1: As TA (ta_a), create lab in Class 1
     const createLabRes = await app.inject({
@@ -118,7 +121,7 @@ describe("End-to-End Flow — Rubric Criterion 1", () => {
         classId: 1,
         name: "Lab 1 — sort-merge",
         statement: "Sort an array of numbers using merge sort.",
-        closesAt: new Date(Date.now() - 1000).toISOString(), // closed lab for publishing test
+        closesAt: labDeadline.toISOString(),
       }),
     });
     expect(createLabRes.statusCode).toBe(201);
@@ -154,6 +157,33 @@ describe("End-to-End Flow — Rubric Criterion 1", () => {
       headers: { authorization: "Bearer tok-ta-a", "content-type": "application/json" },
       payload: JSON.stringify({ input: "5\n3 1 4 1 5\n", expectedOutput: "1 1 3 4 5\n" }),
     });
+
+    // Step 1b: GET /v1/labs respects class ownership (ta_a sees lab, ta_b sees only class 2, stu1 sees class 1)
+    const taALabs = await app.inject({
+      method: "GET",
+      url: "/v1/labs",
+      headers: { authorization: "Bearer tok-ta-a" },
+    });
+    expect(taALabs.statusCode).toBe(200);
+    expect((taALabs.json<{ labs: Array<{ id: number }> }>().labs ?? []).map((l) => l.id)).toContain(
+      lab.id,
+    );
+
+    const taBLabs = await app.inject({
+      method: "GET",
+      url: "/v1/labs",
+      headers: { authorization: "Bearer tok-ta-b" },
+    });
+    expect(taBLabs.statusCode).toBe(200);
+    expect(
+      (taBLabs.json<{ labs: Array<{ id: number }> }>().labs ?? []).map((l) => l.id),
+    ).not.toContain(lab.id);
+
+    // Step 1c: Interactive UI includes FAQ-06 notice and HTML escaping against stored XSS
+    const uiRes = await app.inject({ method: "GET", url: "/ui" });
+    expect(uiRes.statusCode).toBe(200);
+    expect(uiRes.body).toContain("FAQ-06");
+    expect(uiRes.body).toContain("escapeHtml");
 
     // Step 2: As Student (stu1), submit compliant solution s01
     const sub1Res = await app.inject({
@@ -244,6 +274,9 @@ describe("End-to-End Flow — Rubric Criterion 1", () => {
       headers: { authorization: "Bearer tok-ta-b" },
     });
     expect(otherTaQueue.statusCode).toBe(404);
+
+    // Advance clock past lab deadline so publishing is eligible
+    currentTime = new Date("2026-11-25T12:00:00.000Z");
 
     // Step 7: Publishing fails while pending reviews exist
     const publishAttempt = await app.inject({

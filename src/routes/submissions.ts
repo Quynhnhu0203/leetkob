@@ -3,10 +3,12 @@ import { sendProblem } from "../problems.js";
 import { authenticate } from "../auth.js";
 import type { Store } from "../store.js";
 import type { SubmissionQueue } from "../queue/queue.js";
-import type { JudgeWorker } from "../queue/worker.js";
 
 type LabParams = { Params: { labId: string } };
 type SubmissionParams = { Params: { submissionId: string } };
+
+/** Theo FAQ-05: https://github.com/tkob-team/LeeTKOB-FAQ/blob/main/FAQ.md#faq-05 */
+export const MAX_CODE_BYTES = 65_536;
 
 function parseId(raw: string): number | undefined {
   if (!/^[1-9][0-9]{0,9}$/.test(raw)) return undefined;
@@ -18,9 +20,9 @@ export function registerSubmissionRoutes(
   app: FastifyInstance,
   store: Store,
   queue: SubmissionQueue,
-  worker?: JudgeWorker,
+  now: () => Date = () => new Date(),
 ): void {
-  // POST /v1/labs/:labId/submissions — Student submits C++ code
+  // POST /v1/labs/:labId/submissions — Student submits C++ code onto the queue
   app.post<LabParams>("/v1/labs/:labId/submissions", async (req, reply) => {
     const user = await authenticate(req, store);
     if (!user) {
@@ -32,6 +34,19 @@ export function registerSubmissionRoutes(
     const lab = labId === undefined ? undefined : await store.lab(labId);
     if (!lab) {
       return sendProblem(reply, "not-found", "Lab not found.");
+    }
+
+    if (user.role === "student" && !(await store.isStudentOfClass(user.id, lab.classId))) {
+      return sendProblem(reply, "not-found", "Lab not found.");
+    }
+
+    if (user.role === "ta" && !(await store.isTaOfClass(user.id, lab.classId))) {
+      return sendProblem(reply, "not-found", "Lab not found.");
+    }
+
+    // Theo FAQ-03: https://github.com/tkob-team/LeeTKOB-FAQ/blob/main/FAQ.md#faq-03
+    if (now() > lab.closesAt) {
+      return sendProblem(reply, "forbidden", "The submission window for this lab has closed.");
     }
 
     let body: { code?: string };
@@ -46,6 +61,14 @@ export function registerSubmissionRoutes(
       return sendProblem(reply, "validation", "code must be a non-empty string.");
     }
 
+    if (Buffer.byteLength(body.code, "utf8") > MAX_CODE_BYTES) {
+      return sendProblem(
+        reply,
+        "payload-too-large",
+        "Submitted code exceeds the 64 KB maximum limit.",
+      );
+    }
+
     const sub = await store.createSubmission({
       labId: lab.id,
       studentId: user.id,
@@ -57,11 +80,6 @@ export function registerSubmissionRoutes(
       labId: lab.id,
       code: body.code,
     });
-
-    // If worker is running in inline / background mode, process job
-    if (worker) {
-      void worker.processNext();
-    }
 
     return reply.code(202).send({
       id: sub.id,
@@ -92,18 +110,16 @@ export function registerSubmissionRoutes(
 
     // Role check and ownership check
     if (user.role === "student") {
-      // A student can only view their own submission
-      // Other submissions return 404 identical to non-existent (FAQ-01, Threat A1)
+      // Theo FAQ-01: https://github.com/tkob-team/LeeTKOB-FAQ/blob/main/FAQ.md#faq-01
       if (sub.studentId !== user.id) {
         return sendProblem(reply, "not-found", "Submission not found.");
       }
 
-      // Check if lab has been published
       const pub = await store.publication(lab.id);
       const isPublished = Boolean(pub);
 
-      // As per FAQ-08: Before publishing, student sees ONLY test status (AC, WA, etc.)
-      // Constraint review results and evidence remain hidden!
+      // Theo FAQ-08: https://github.com/tkob-team/LeeTKOB-FAQ/blob/main/FAQ.md#faq-08
+      // Before publishing, student sees ONLY test status (AC, WA, etc.); constraint reviews remain hidden.
       return reply.code(200).send({
         id: sub.id,
         labId: sub.labId,
@@ -111,13 +127,12 @@ export function registerSubmissionRoutes(
         testVerdict: sub.testVerdict,
         submittedAt: sub.submittedAt.toISOString(),
         published: isPublished,
-        // Before publish, constraint review is hidden
         constraintReview: isPublished ? "published" : "hidden_until_published",
       });
     }
 
     if (user.role === "ta") {
-      // A TA of another class gets 404 (Threat A2, Rubric Criterion 1)
+      // A TA of another class gets 404 (Rubric Criterion 1 & contract ownership)
       if (!(await store.isTaOfClass(user.id, lab.classId))) {
         return sendProblem(reply, "not-found", "Submission not found in your classes.");
       }

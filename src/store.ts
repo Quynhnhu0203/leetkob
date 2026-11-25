@@ -40,6 +40,15 @@ export interface EvidenceLine {
   text: string;
 }
 
+export type UnsureReason =
+  | "model_unsure"
+  | "invalid_schema"
+  | "evidence_mismatch"
+  | "timeout"
+  | "cost_cap"
+  | "model_off"
+  | "error";
+
 export interface ReviewItem {
   labId: number;
   submissionId: number;
@@ -48,6 +57,7 @@ export interface ReviewItem {
   evidence: EvidenceLine[];
   deduction: number;
   decidedBy: "hard_rule" | "model" | "ta";
+  unsureReason?: UnsureReason | undefined;
   reviewed: boolean;
   reviewedBy?: number;
   reviewedAt?: string;
@@ -70,7 +80,9 @@ export interface Submission {
 export interface Store {
   userByToken(token: string): Promise<User | undefined>;
   lab(labId: number): Promise<Lab | undefined>;
+  listLabsForUser(user: User): Promise<Lab[]>;
   isTaOfClass(userId: number, classId: number): Promise<boolean>;
+  isStudentOfClass(userId: number, classId: number): Promise<boolean>;
   publication(labId: number): Promise<Publication | undefined>;
   pendingReviewCount(labId: number): Promise<number>;
   publish(
@@ -103,12 +115,18 @@ export interface Store {
 
   // Review Queue
   getReviewQueue(labId: number): Promise<ReviewItem[]>;
+  getReviewItem(
+    labId: number,
+    submissionId: number,
+    constraintId: string,
+  ): Promise<ReviewItem | undefined>;
   updateReviewItem(
     labId: number,
     submissionId: number,
     constraintId: string,
-    verdict: "pass" | "violation" | "unsure",
+    verdict: "pass" | "violation",
     reviewedBy: number,
+    evidence?: EvidenceLine[],
   ): Promise<boolean>;
 }
 
@@ -210,8 +228,27 @@ export class InMemoryStore implements Store {
     return Promise.resolve(this.labs.get(labId));
   }
 
+  listLabsForUser(user: User): Promise<Lab[]> {
+    const all = Array.from(this.labs.values());
+    if (user.role === "admin") {
+      return Promise.resolve(all);
+    }
+    if (user.role === "ta") {
+      return Promise.resolve(
+        all.filter((lab) => this.classTas.get(lab.classId)?.has(user.id) ?? false),
+      );
+    }
+    return Promise.resolve(
+      all.filter((lab) => this.classStudents.get(lab.classId)?.has(user.id) ?? false),
+    );
+  }
+
   isTaOfClass(userId: number, classId: number): Promise<boolean> {
     return Promise.resolve(this.classTas.get(classId)?.has(userId) ?? false);
+  }
+
+  isStudentOfClass(userId: number, classId: number): Promise<boolean> {
+    return Promise.resolve(this.classStudents.get(classId)?.has(userId) ?? false);
   }
 
   publication(labId: number): Promise<Publication | undefined> {
@@ -337,12 +374,25 @@ export class InMemoryStore implements Store {
     return Promise.resolve(list.map((r) => ({ ...r })));
   }
 
+  getReviewItem(
+    labId: number,
+    submissionId: number,
+    constraintId: string,
+  ): Promise<ReviewItem | undefined> {
+    const item = this.reviewItems.find(
+      (r) =>
+        r.labId === labId && r.submissionId === submissionId && r.constraintId === constraintId,
+    );
+    return Promise.resolve(item ? { ...item } : undefined);
+  }
+
   updateReviewItem(
     labId: number,
     submissionId: number,
     constraintId: string,
-    verdict: "pass" | "violation" | "unsure",
+    verdict: "pass" | "violation",
     reviewedBy: number,
+    evidence?: EvidenceLine[],
   ): Promise<boolean> {
     const item = this.reviewItems.find(
       (r) =>
@@ -350,6 +400,11 @@ export class InMemoryStore implements Store {
     );
     if (!item) return Promise.resolve(false);
     item.verdict = verdict;
+    if (evidence !== undefined) {
+      item.evidence = evidence;
+    } else if (verdict === "pass") {
+      item.evidence = [];
+    }
     item.reviewed = true;
     item.reviewedBy = reviewedBy;
     item.reviewedAt = new Date().toISOString();

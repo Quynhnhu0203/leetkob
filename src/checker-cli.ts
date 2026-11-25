@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { checkHardRule } from "./reviewer/hard-rules.js";
 import { GeminiModelClient, OfflineFakeModelClient, type ModelClient } from "./model/client.js";
 import { validateAndVerifyModelOutput } from "./reviewer/limits.js";
@@ -12,20 +13,50 @@ export interface PredictionLine {
   evidence: Array<{ line: number; text: string }>;
 }
 
+const DEFAULT_TIMEOUT_MS = 25_000;
+
+async function callWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function runChecker(options: {
   dataDir: string;
   outputFile: string;
-  modelClient?: ModelClient;
-  modelOff?: boolean;
+  logFile?: string | undefined;
+  delayMs?: number | undefined;
+  timeoutMs?: number | undefined;
+  modelClient?: ModelClient | undefined;
+  modelOff?: boolean | undefined;
 }): Promise<PredictionLine[]> {
   const modelOff =
     options.modelOff ?? (process.env.MODEL_OFF === "1" || !process.env.GEMINI_API_KEY);
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const logFilePath =
+    options.logFile ||
+    process.env.LLM_CALL_LOG_PATH ||
+    path.resolve(process.cwd(), "call-log.jsonl");
+
+  if (!modelOff && !options.modelClient) {
+    await fs.rm(logFilePath, { force: true });
+  }
+
   const client =
     options.modelClient ??
     (modelOff
       ? new OfflineFakeModelClient()
       : new GeminiModelClient({
-          logFilePath: path.resolve(process.cwd(), "call-log.jsonl"),
+          logFilePath,
+          timeoutMs,
         }));
 
   const problemsDir = path.join(options.dataDir, "problems");
@@ -46,7 +77,7 @@ export async function runChecker(options: {
     try {
       statement = await fs.readFile(stmtPath, "utf8");
     } catch {
-      // statement optional or empty
+      // statement optional
     }
 
     const constrContent = await fs.readFile(constrPath, "utf8");
@@ -66,7 +97,7 @@ export async function runChecker(options: {
       const code = await fs.readFile(path.join(solProbDir, solFile), "utf8");
 
       for (const c of constraints) {
-        // 1. Hard rules first for ban-list
+        // 1. Hard rules first for ban-list constraints (model is never called)
         const hardRes = checkHardRule(code, c.text);
         if (hardRes.isBanList && hardRes.verdict) {
           predictions.push({
@@ -89,12 +120,22 @@ export async function runChecker(options: {
           continue;
         }
 
+        if (options.delayMs && options.delayMs > 0) {
+          await new Promise((r) => setTimeout(r, options.delayMs));
+        }
+
         try {
-          const raw = await client.call({
-            statement,
-            constraint: { id: c.id, text: c.text },
-            code,
-          });
+          const raw = await callWithTimeout(
+            client.call(
+              {
+                statement,
+                constraint: { id: c.id, text: c.text },
+                code,
+              },
+              { solution: solutionKey, constraint: c.id },
+            ),
+            timeoutMs,
+          );
           const validated = validateAndVerifyModelOutput(raw, code);
           predictions.push({
             solution: solutionKey,
@@ -116,7 +157,8 @@ export async function runChecker(options: {
 
   // Write predictions to JSONL file
   await fs.mkdir(path.dirname(path.resolve(options.outputFile)), { recursive: true });
-  const content = predictions.map((p) => JSON.stringify(p)).join("\n") + "\n";
+  const content =
+    predictions.length > 0 ? predictions.map((p) => JSON.stringify(p)).join("\n") + "\n" : "";
   await fs.writeFile(options.outputFile, content, "utf8");
 
   return predictions;
@@ -124,21 +166,43 @@ export async function runChecker(options: {
 
 // CLI runner when invoked directly
 async function main() {
+  if (process.env.MODEL_OFF !== "1") {
+    try {
+      process.loadEnvFile();
+    } catch {
+      // .env optional
+    }
+  }
+
   const args = process.argv.slice(2);
   let dataDir = ".";
   let outputFile = "predictions.jsonl";
+  let logFile: string | undefined;
+  let delayMs = 0;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--data" && args[i + 1]) {
       dataDir = args[++i]!;
     } else if (args[i] === "--output" && args[i + 1]) {
       outputFile = args[++i]!;
+    } else if (args[i] === "--log" && args[i + 1]) {
+      logFile = args[++i]!;
+    } else if (args[i] === "--delay-ms" && args[i + 1]) {
+      delayMs = Number(args[++i]!) || 0;
     }
   }
 
-  await runChecker({ dataDir, outputFile });
+  await runChecker({ dataDir, outputFile, logFile, delayMs });
 }
 
-if (process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1]))) {
-  void main();
+const isDirectRun =
+  Boolean(process.argv[1]) &&
+  path.resolve(fileURLToPath(import.meta.url)).toLowerCase() ===
+    path.resolve(process.argv[1]!).toLowerCase();
+
+if (isDirectRun) {
+  main().catch((err: unknown) => {
+    console.error(err);
+    process.exit(1);
+  });
 }

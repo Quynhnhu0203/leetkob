@@ -10,7 +10,11 @@ int main() {
             std::cerr << "fork failed (pids limit reached)\n";
             return 1;
         }
+        if (pid == 0) {
+            // Keep child slot occupied until parent hits pids limit and exits
+            sleep(10);
+            return 0;
+        }
     }
     return 0;
 }
-

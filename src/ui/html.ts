@@ -15,27 +15,34 @@ export function renderAppHtml(): string {
     .badge-unsure { background-color: #ef6c00; color: #fff; }
     .badge-ac { background-color: #1565c0; color: #fff; }
     .badge-wa { background-color: #d84315; color: #fff; }
-    .evidence-box { background: #f5f5f5; border-left: 3px solid #c62828; padding: 0.5rem; margin: 0.5rem 0; font-family: monospace; font-size: 0.85rem; color: #333; }
+    .evidence-box { background: #f5f5f5; border-left: 3px solid #c62828; padding: 0.5rem; margin: 0.5rem 0; font-family: monospace; font-size: 0.85rem; color: #333; white-space: pre-wrap; }
+    .notice-box { background: #eef6ff; border-left: 4px solid #1565c0; padding: 0.75rem 1rem; margin: 1rem 0; font-size: 0.9rem; color: #1b2838; }
     .panel { border: 1px solid var(--pico-muted-border-color); border-radius: 8px; padding: 1.5rem; margin-bottom: 2rem; background: var(--pico-card-background-color); }
     pre { max-height: 250px; overflow-y: auto; font-size: 0.8rem; }
   </style>
 </head>
 <body>
   <header>
-    <div style="display:flex; justify-content:space-between; align-items:center;">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
       <div>
         <h2>LeeTKOB · PA#3 Prototype</h2>
         <p><small>Constraint Review: Hard Rules first · Real LLM · TA Review Queue · Isolated Sandbox</small></p>
       </div>
-      <div>
-        <label for="userSelect"><strong>Sign in as:</strong></label>
-        <select id="userSelect" onchange="switchUser()">
-          <option value="tok-ta-a">ta_a (TA · Class 1 — NMLT 23CTT1)</option>
-          <option value="tok-ta-b">ta_b (TA · Class 2 — NMLT 23CTT2)</option>
-          <option value="tok-stu1">stu1 (Student · Class 1)</option>
-          <option value="tok-stu2">stu2 (Student · Class 1)</option>
-          <option value="tok-admin">admin (Admin)</option>
-        </select>
+      <div style="display:flex; gap:1rem; align-items:center;">
+        <div>
+          <label for="userSelect"><strong>Sign in as:</strong></label>
+          <select id="userSelect" onchange="switchUser()">
+            <option value="tok-ta-a">ta_a (TA · Class 1 — NMLT 23CTT1)</option>
+            <option value="tok-ta-b">ta_b (TA · Class 2 — NMLT 23CTT2)</option>
+            <option value="tok-stu1">stu1 (Student · Class 1)</option>
+            <option value="tok-stu2">stu2 (Student · Class 1)</option>
+            <option value="tok-admin">admin (Admin)</option>
+          </select>
+        </div>
+        <div>
+          <label for="labSelect"><strong>Active Lab:</strong></label>
+          <select id="labSelect" onchange="selectLab()"></select>
+        </div>
       </div>
     </div>
   </header>
@@ -47,13 +54,13 @@ export function renderAppHtml(): string {
       <div class="grid">
         <div>
           <h4>1. Create Lab from <code>sort-merge</code></h4>
-          <p>Initialize a lab in your class with the dev-set problem statement, 5 tests, and constraints C1 (deduction 3) & C2 (deduction 4).</p>
+          <p>Initialize a lab in your class with the dev-set problem statement, tests, and constraints C1 (deduction 3) &amp; C2 (deduction 4).</p>
           <button onclick="createSortMergeLab()" class="primary">Create sort-merge Lab</button>
           <div id="labCreatedStatus" style="margin-top:10px;"></div>
         </div>
         <div>
           <h4>2. Publish Marks</h4>
-          <p>Publishing requires all verdicts in the review queue to be confirmed by the TA (FAQ-12).</p>
+          <p>Publishing refuses while any verdict is unreviewed or before close (<a href="https://github.com/tkob-team/LeeTKOB-FAQ/blob/main/FAQ.md#faq-12" target="_blank" rel="noopener">FAQ-12</a>).</p>
           <button onclick="publishLab()" class="secondary">Publish Lab Marks</button>
           <div id="publishStatus" style="margin-top:10px;"></div>
         </div>
@@ -62,7 +69,7 @@ export function renderAppHtml(): string {
       <hr />
 
       <h4>TA Review Queue</h4>
-      <p><small>Verdicts appear here for TA confirmation. Students cannot see them before publishing (FAQ-08).</small></p>
+      <p><small>Verdicts appear here with evidence lines &amp; deductions. Students cannot see them before publishing (<a href="https://github.com/tkob-team/LeeTKOB-FAQ/blob/main/FAQ.md#faq-08" target="_blank" rel="noopener">FAQ-08</a>).</small></p>
       <div id="reviewQueueContainer">
         <p><em>Loading review queue...</em></p>
       </div>
@@ -71,15 +78,21 @@ export function renderAppHtml(): string {
     <!-- STUDENT SECTION -->
     <div id="studentSection" class="panel" style="display:none;">
       <h3>Student Submission Portal (<span id="studentUserLabel">stu1</span>)</h3>
-      <p>Submit your C++ solution for judging in the queue and hardened sandbox.</p>
-      
+      <div id="studentLabDetails"></div>
+      <div class="notice-box">
+        <strong>Notice (<a href="https://github.com/tkob-team/LeeTKOB-FAQ/blob/main/FAQ.md#faq-06" target="_blank" rel="noopener">FAQ-06</a>):</strong>
+        Your code will be compiled and tested in an isolated sandbox, then checked by hard rules and an AI model.
+        Only the problem statement, constraints, and code with comments, names, and student IDs stripped are sent to the model.
+        The model never decides deductions; your TA reviews all verdicts before marks are published.
+      </div>
+
       <div class="grid">
         <button onclick="loadTemplate('s01')">Load Compliant (s01)</button>
         <button onclick="loadTemplate('s04')">Load Violation (s04)</button>
         <button onclick="loadTemplate('s09')">Load Injection (s09)</button>
       </div>
 
-      <label for="codeEditor"><strong>C++ Source Code:</strong></label>
+      <label for="codeEditor"><strong>C++ Source Code (max 64 KB):</strong></label>
       <textarea id="codeEditor" rows="10" placeholder="// Paste or write C++ code here..."></textarea>
       <button onclick="submitStudentCode()" class="primary">Submit Code to Queue</button>
 
@@ -90,6 +103,15 @@ export function renderAppHtml(): string {
   <script>
     let activeToken = 'tok-ta-a';
     let currentLabId = 1;
+
+    function escapeHtml(str) {
+      return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
 
     const S01_CODE = \`#include <iostream>
 using namespace std;
@@ -150,18 +172,70 @@ int main() {
     return 0;
 }\`;
 
-    function switchUser() {
+    async function refreshLabs(preferredId) {
+      const select = document.getElementById('labSelect');
+      const res = await fetch('/v1/labs', { headers: { 'Authorization': 'Bearer ' + activeToken } });
+      if (!res.ok) {
+        select.innerHTML = '';
+        return;
+      }
+      const data = await res.json();
+      const labs = data.labs || [];
+      select.innerHTML = labs.map(l =>
+        '<option value="' + escapeHtml(l.id) + '">#' + escapeHtml(l.id) + ' — ' + escapeHtml(l.name || 'Lab') + '</option>'
+      ).join('');
+      if (labs.length > 0) {
+        const chosen = preferredId && labs.some(l => l.id === Number(preferredId))
+          ? Number(preferredId)
+          : labs[labs.length - 1].id;
+        currentLabId = chosen;
+        select.value = String(chosen);
+      }
+    }
+
+    async function loadSelectedLabDetails() {
+      const container = document.getElementById('studentLabDetails');
+      if (!currentLabId) { container.innerHTML = ''; return; }
+      const res = await fetch('/v1/labs/' + currentLabId, {
+        headers: { 'Authorization': 'Bearer ' + activeToken }
+      });
+      if (!res.ok) {
+        container.innerHTML = '<p><em>Lab unavailable for your class.</em></p>';
+        return;
+      }
+      const lab = await res.json();
+      const cHtml = (lab.constraints || []).map(c =>
+        '<li><strong>' + escapeHtml(c.id) + '</strong> (-' + escapeHtml(c.deduction) + ' pts): ' + escapeHtml(c.text) + '</li>'
+      ).join('');
+      container.innerHTML =
+        '<article><h5>' + escapeHtml(lab.name || 'Lab') + '</h5>' +
+        '<p>' + escapeHtml(lab.statement || '') + '</p>' +
+        '<ul>' + cHtml + '</ul></article>';
+    }
+
+    async function selectLab() {
+      currentLabId = Number(document.getElementById('labSelect').value) || currentLabId;
+      const isTa = activeToken.startsWith('tok-ta') || activeToken === 'tok-admin';
+      if (isTa) {
+        await fetchReviewQueue();
+      } else {
+        await loadSelectedLabDetails();
+      }
+    }
+
+    async function switchUser() {
       activeToken = document.getElementById('userSelect').value;
       const isTa = activeToken.startsWith('tok-ta') || activeToken === 'tok-admin';
       document.getElementById('taSection').style.display = isTa ? 'block' : 'none';
       document.getElementById('studentSection').style.display = isTa ? 'none' : 'block';
 
+      await refreshLabs();
       if (isTa) {
         document.getElementById('taClassLabel').innerText = activeToken === 'tok-ta-b' ? 'Class 2' : 'Class 1';
-        currentLabId = activeToken === 'tok-ta-b' ? 2 : 1;
-        fetchReviewQueue();
+        await fetchReviewQueue();
       } else {
         document.getElementById('studentUserLabel').innerText = activeToken === 'tok-stu1' ? 'stu1' : 'stu2';
+        await loadSelectedLabDetails();
       }
     }
 
@@ -177,35 +251,52 @@ int main() {
         headers: { 'Authorization': 'Bearer ' + activeToken, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           classId: activeToken === 'tok-ta-b' ? 2 : 1,
-          name: 'Lab 1 — Merge Sort (sort-merge)',
-          statement: 'Sort an array of integers using merge sort without library sort.',
+          name: 'Lab — Merge Sort (sort-merge)',
+          statement: 'Read n integers and print them in non-decreasing order using merge sort.',
           closesAt: new Date(Date.now() + 86400000).toISOString()
         })
       });
       const data = await res.json();
       if (res.ok) {
         currentLabId = data.id;
-        // Add constraints C1 and C2
         await fetch('/v1/labs/' + currentLabId + '/constraints', {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + activeToken, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: 'C1', text: 'Do not call a library sort function: \`std::sort\`, \`qsort\`.', deduction: 3 })
+          body: JSON.stringify({
+            id: 'C1',
+            text: 'Do not call a library sort function: \`std::sort\`, \`std::stable_sort\`, \`std::partial_sort\`, \`std::ranges::sort\`, \`std::ranges::stable_sort\`, \`qsort\`.',
+            deduction: 3
+          })
         });
         await fetch('/v1/labs/' + currentLabId + '/constraints', {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + activeToken, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: 'C2', text: 'Sort with a merge sort you wrote yourself.', deduction: 4 })
+          body: JSON.stringify({
+            id: 'C2',
+            text: 'Sort with a merge sort you wrote yourself: split the range, sort both halves, merge them (top-down or bottom-up). Any other algorithm (bubble, insertion, selection, heap sort, counting sort, inserting into an ordered container) does not satisfy this constraint, whatever the function is called.',
+            deduction: 4
+          })
         });
-        // Add tests
-        await fetch('/v1/labs/' + currentLabId + '/tests', {
-          method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + activeToken, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ input: '5\\n3 1 4 1 5\\n', expectedOutput: '1 1 3 4 5\\n' })
-        });
-        document.getElementById('labCreatedStatus').innerHTML = '<span style="color:green;">✓ Lab #' + currentLabId + ' created with constraints C1, C2 and tests!</span>';
-        fetchReviewQueue();
+        const tests = [
+          { input: '1\\n42\\n', expectedOutput: '42\\n' },
+          { input: '6\\n5 -2 9 -2 0 7\\n', expectedOutput: '-2 -2 0 5 7 9\\n' },
+          { input: '5\\n1 2 3 4 5\\n', expectedOutput: '1 2 3 4 5\\n' },
+          { input: '5\\n5 4 3 2 1\\n', expectedOutput: '1 2 3 4 5\\n' }
+        ];
+        for (const t of tests) {
+          await fetch('/v1/labs/' + currentLabId + '/tests', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + activeToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify(t)
+          });
+        }
+        await refreshLabs(currentLabId);
+        document.getElementById('labCreatedStatus').innerHTML =
+          '<span style="color:green;">&#10003; Lab #' + escapeHtml(currentLabId) + ' created with C1, C2 and tests!</span>';
+        await fetchReviewQueue();
       } else {
-        document.getElementById('labCreatedStatus').innerHTML = '<span style="color:red;">Error: ' + JSON.stringify(data) + '</span>';
+        document.getElementById('labCreatedStatus').innerHTML =
+          '<span style="color:red;">Error: ' + escapeHtml(JSON.stringify(data)) + '</span>';
       }
     }
 
@@ -222,9 +313,9 @@ int main() {
       const data = await res.json();
       if (res.ok) {
         const subId = data.id;
-        document.getElementById('submissionResult').innerHTML = '<p>Submission #' + subId + ' status: <strong class="badge badge-unsure">queued</strong> (waiting for worker judge...)</p>';
-        
-        // Poll status
+        document.getElementById('submissionResult').innerHTML =
+          '<p>Submission #' + escapeHtml(subId) + ' status: <strong class="badge badge-unsure">queued</strong> (waiting for worker judge...)</p>';
+
         const interval = setInterval(async () => {
           const sRes = await fetch('/v1/submissions/' + subId, {
             headers: { 'Authorization': 'Bearer ' + activeToken }
@@ -233,17 +324,18 @@ int main() {
             const sub = await sRes.json();
             if (sub.status === 'judged') {
               clearInterval(interval);
-              document.getElementById('submissionResult').innerHTML = 
+              document.getElementById('submissionResult').innerHTML =
                 '<div>' +
-                  '<h4>Submission #' + sub.id + ' Judged!</h4>' +
-                  '<p>Status: <span class="badge badge-pass">' + sub.status + '</span> | Test Verdict: <span class="badge badge-ac">' + (sub.testVerdict || 'AC') + '</span></p>' +
-                  '<p><small><em>Notice (FAQ-08): Constraint review verdicts are currently hidden from students until TA publishes marks.</em></small></p>' +
+                  '<h4>Submission #' + escapeHtml(sub.id) + ' Judged!</h4>' +
+                  '<p>Status: <span class="badge badge-pass">' + escapeHtml(sub.status) + '</span> | Test Verdict: <span class="badge badge-ac">' + escapeHtml(sub.testVerdict || 'AC') + '</span></p>' +
+                  '<p><small><em>Notice (<a href="https://github.com/tkob-team/LeeTKOB-FAQ/blob/main/FAQ.md#faq-08" target="_blank" rel="noopener">FAQ-08</a>): Constraint review verdicts remain hidden until the TA publishes marks.</em></small></p>' +
                 '</div>';
             }
           }
         }, 800);
       } else {
-        document.getElementById('submissionResult').innerHTML = '<p style="color:red;">Error: ' + JSON.stringify(data) + '</p>';
+        document.getElementById('submissionResult').innerHTML =
+          '<p style="color:red;">Error: ' + escapeHtml(data.detail || JSON.stringify(data)) + '</p>';
       }
     }
 
@@ -253,12 +345,12 @@ int main() {
         headers: { 'Authorization': 'Bearer ' + activeToken }
       });
       if (!res.ok) {
-        el.innerHTML = '<p style="color:red;">Unable to load review queue (Status ' + res.status + '). If TA of another class, access is refused (404).</p>';
+        el.innerHTML = '<p style="color:red;">Unable to load review queue (Status ' + escapeHtml(res.status) + '). If TA of another class, access is refused (404).</p>';
         return;
       }
       const data = await res.json();
       if (!data.items || data.items.length === 0) {
-        el.innerHTML = '<p><em>No submissions currently pending review in Lab #' + currentLabId + '.</em></p>';
+        el.innerHTML = '<p><em>No submissions currently in Lab #' + escapeHtml(currentLabId) + ' review queue.</em></p>';
         return;
       }
 
@@ -270,34 +362,65 @@ int main() {
         const vClass = item.verdict === 'pass' ? 'badge-pass' : (item.verdict === 'violation' ? 'badge-violation' : 'badge-unsure');
         let evHtml = '<em>none</em>';
         if (item.evidence && item.evidence.length > 0) {
-          evHtml = item.evidence.map(e => '<div class="evidence-box">L' + e.line + ': ' + e.text + '</div>').join('');
+          evHtml = item.evidence.map(e =>
+            '<div class="evidence-box">L' + escapeHtml(e.line) + ': ' + escapeHtml(e.text) + '</div>'
+          ).join('');
         }
+        const reasonNote = item.unsureReason ? '<div><small>Reason: ' + escapeHtml(item.unsureReason) + '</small></div>' : '';
+
+        const actionHtml = item.reviewed
+          ? '<span style="color:green;">&#10003; Confirmed</span>'
+          : (item.verdict === 'unsure'
+              ? '<button class="outline review-btn" data-sub="' + escapeHtml(item.submissionId) + '" data-cid="' + escapeHtml(item.constraintId) + '" data-verdict="pass" style="padding:4px 8px; font-size:0.8rem;">Confirm Pass</button> ' +
+                '<button class="outline secondary review-viol-btn" data-sub="' + escapeHtml(item.submissionId) + '" data-cid="' + escapeHtml(item.constraintId) + '" style="padding:4px 8px; font-size:0.8rem;">Mark Violation</button>'
+              : '<button class="outline review-btn" data-sub="' + escapeHtml(item.submissionId) + '" data-cid="' + escapeHtml(item.constraintId) + '" data-verdict="' + escapeHtml(item.verdict) + '" style="padding:4px 8px; font-size:0.8rem;">Confirm</button>');
 
         html += '<tr>' +
-          '<td>#' + item.submissionId + '</td>' +
-          '<td><strong>' + item.constraintId + '</strong></td>' +
-          '<td><span class="badge ' + vClass + '">' + item.verdict + '</span></td>' +
-          '<td>' + item.decidedBy + '</td>' +
-          '<td>-' + item.deduction + ' pts</td>' +
+          '<td>#' + escapeHtml(item.submissionId) + '</td>' +
+          '<td><strong>' + escapeHtml(item.constraintId) + '</strong></td>' +
+          '<td><span class="badge ' + vClass + '">' + escapeHtml(item.verdict) + '</span>' + reasonNote + '</td>' +
+          '<td>' + escapeHtml(item.decidedBy) + '</td>' +
+          '<td>-' + escapeHtml(item.deduction) + ' pts</td>' +
           '<td>' + evHtml + '</td>' +
-          '<td>' +
-            (item.reviewed 
-              ? '<span style="color:green;">✓ Confirmed</span>' 
-              : '<button onclick="approveReview(' + item.submissionId + ', \\'' + item.constraintId + '\\', \\'' + item.verdict + '\\')" class="outline" style="padding:4px 8px; font-size:0.8rem;">Confirm</button>') +
-          '</td>' +
+          '<td>' + actionHtml + '</td>' +
         '</tr>';
       }
       html += '</tbody></table>';
       el.innerHTML = html;
+
+      el.querySelectorAll('.review-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          approveReview(btn.getAttribute('data-sub'), btn.getAttribute('data-cid'), btn.getAttribute('data-verdict'));
+        });
+      });
+      el.querySelectorAll('.review-viol-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          markViolationWithEvidence(btn.getAttribute('data-sub'), btn.getAttribute('data-cid'));
+        });
+      });
+    }
+
+    async function markViolationWithEvidence(subId, constrId) {
+      const lineRaw = prompt('Enter 1-based evidence line number (FAQ-09):');
+      const lineNum = Number(lineRaw);
+      if (!Number.isInteger(lineNum) || lineNum < 1) { alert('Valid positive integer line number required.'); return; }
+      const text = prompt('Enter exact offending source line text:');
+      if (!text) { alert('Evidence text is required.'); return; }
+      await fetch('/v1/labs/' + currentLabId + '/reviews/' + encodeURIComponent(subId) + '/' + encodeURIComponent(constrId), {
+        method: 'PUT',
+        headers: { 'Authorization': 'Bearer ' + activeToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verdict: 'violation', evidence: [{ line: lineNum, text }] })
+      });
+      await fetchReviewQueue();
     }
 
     async function approveReview(subId, constrId, verdict) {
-      await fetch('/v1/labs/' + currentLabId + '/reviews/' + subId + '/' + constrId, {
+      await fetch('/v1/labs/' + currentLabId + '/reviews/' + encodeURIComponent(subId) + '/' + encodeURIComponent(constrId), {
         method: 'PUT',
         headers: { 'Authorization': 'Bearer ' + activeToken, 'Content-Type': 'application/json' },
         body: JSON.stringify({ verdict })
       });
-      fetchReviewQueue();
+      await fetchReviewQueue();
     }
 
     async function publishLab() {
@@ -308,13 +431,12 @@ int main() {
       });
       const data = await res.json();
       if (res.ok) {
-        document.getElementById('publishStatus').innerHTML = '<span style="color:green;">✓ Marks successfully published!</span>';
+        document.getElementById('publishStatus').innerHTML = '<span style="color:green;">&#10003; Marks successfully published!</span>';
       } else {
-        document.getElementById('publishStatus').innerHTML = '<span style="color:red;">Publish refused: ' + (data.detail || data.title) + '</span>';
+        document.getElementById('publishStatus').innerHTML = '<span style="color:red;">Publish refused: ' + escapeHtml(data.detail || data.title) + '</span>';
       }
     }
 
-    // Initial load
     switchUser();
   </script>
 </body>

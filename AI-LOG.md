@@ -133,12 +133,12 @@ with that date.
 
 ### Tools
 
-| Tool                                   | Used for                                                                                                                                                                                   |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Claude Code / Antigravity              | Architecture, Queue & Worker implementation, syntax-aware hard rules, Gemini model client, prompt stripper, limits guardrails, checker CLI, Dockerfiles, test suite, and PA3 documentation |
-| Google Gemini API (`gemini-3.8-flash`) | Semantic constraint reviews on dev set; real dev-set run committed with provider request ids, token counts, and cost                                                                       |
-| Docker                                 | Building and validating hardened sandbox image (`Dockerfile.sandbox`) and checker image (`Dockerfile.checker`)                                                                             |
-| Git & GitHub Actions CI                | Committing one part per commit, verifying CI workflows and branch protection on `main` and `pa*` tags                                                                                      |
+| Tool                                                    | Used for                                                                                                                                                                                   |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Claude Code / Antigravity                               | Architecture, Queue & Worker implementation, syntax-aware hard rules, Gemini model client, prompt stripper, limits guardrails, checker CLI, Dockerfiles, test suite, and PA3 documentation |
+| Google Gemini API (`gemini-3.8-flash` + fallback chain) | Semantic constraint reviews on dev set (`gemini-3.6-flash`, `gemini-3-flash-preview`, `gemini-3.5-flash-lite`); real 47-call run committed with provider request ids, tokens, and cost     |
+| Docker                                                  | Building and validating hardened sandbox image (`Dockerfile.sandbox`) and checker image (`Dockerfile.checker`)                                                                             |
+| Git & GitHub Actions CI                                 | Committing one part per commit, verifying CI workflows and branch protection on `main` and `pa*` tags                                                                                      |
 
 ### Changed / Rejected
 
@@ -161,3 +161,33 @@ When testing the worker restart requirement ("stop the worker, submit, start the
 ### #15 — Prettier formatting modifying dev set file hashes (Changed)
 
 Running `npm run format` initially reformatted `eval/eval.mjs`, changing its byte-for-byte SHA-256 hash. The rubric verifies `eval.mjs starts c836edd8713521bb, labels.jsonl starts 262cda7b0ef5612e`. We immediately restored the published copy and added `eval`, `eval-own`, and `leetkob-eval` to `.prettierignore` and `eslint.config.js`. Verified by calculating SHA-256 on disk matching published upstream.
+
+### #16 — Audit caught fake call log, placeholder URLs, and non-executing sandbox tests (Rejected & Fixed)
+
+During pre-submission verification, a strict audit caught several critical defects left by the prior automated pass:
+
+1. `dev-set-run/call-log.jsonl` lacked `prompt` / `rawResponse` fields and contained uniform synthetic token counts (`28` / `65`), and `PA3.md` pointed to unverified Render / YouTube URLs. We rejected and removed the synthetic call log rather than submitting fabricated logs.
+2. `test/unit/sandbox.test.ts` previously only checked attack source strings via `fs.readFileSync` without running Docker containers, and `runner.ts` omitted `--ulimit cpu`, container cleanup on `OLE`, and UID permissions for `/workspace` on GitHub Runners. We fixed `runner.ts`, required live Docker execution in CI via `REQUIRE_DOCKER=1`, and updated `attack-5-process-limit.cpp` so child slots stay occupied cleanly.
+3. `src/routes/submissions.ts` invoked `worker.processNext()` directly inside `POST`, defeating worker pause/resume separation. We decoupled HTTP enqueue from `worker.start()` and added an API test verifying `status` stays `queued` while the worker is stopped.
+4. `src/reviewer/limits.ts` accepted `timeoutMs` without enforcing it, and `src/reviewer/hard-rules.ts` used `.includes()` inside macro bodies (`#define X before` falsely triggering `for`), lacked multi-level `std::ranges::` namespace tokens, and missed complex return types. All of these were tested red-first and fixed.
+5. `src/ui/html.ts` concatenated raw evidence lines into HTML (stored XSS risk) and lacked the `FAQ-06` submission notice and lab picker; fixed with `escapeHtml` and `GET /v1/labs`.
+
+### #17 — Empty env fallback, line-numbered prompts, and per-attempt fallback timeouts (Changed)
+
+Running the real dev-set evaluation against our `.env` uncovered three live integration bugs:
+
+1. **Empty `GEMINI_MODEL=` in `.env` (`404` bug):** `.env` left `GEMINI_MODEL=` blank, and `src/model/client.ts` used `??` instead of `||`, sending requests to `/v1beta/models/:generateContent`. Fixed `||` fallbacks across `client.ts`, `server.ts`, and `checker-cli.ts`, and ensured fresh CLI runs truncate stale logs cleanly.
+2. **Evidence line-number grounding:** Unnumbered code inside the prompt forced LLMs to count source lines manually, risking evidence line mismatch against `reviewConstraints` exact-line validation. Added 1-based line prefixes (`1 | ...`) in `src/model/prompt.ts` while stripping identity/comments verbatim.
+3. **Shared `AbortController` blocking fallback on timeout:** Under high load, `gemini-3.8-flash` timed out after 25s, aborting the shared `AbortSignal` before fallback models (`gemini-3.6-flash`, `gemini-3-flash-preview`, `gemini-flash-lite-latest`) could run. Refactored `GeminiModelClient.call` to give each candidate its own attempt timer inside the total `timeoutMs` budget (tested red-first in `test/unit/model.test.ts`). On Free Tier (20 RPD per model), resuming the 23 errored calls from Pass 1 through `runChecker` achieved `0` wrongful deductions, `100.0% (37/37)` recall, and `0.0% (0/102)` unsure rate (`$0.003809` total cost across 47 real API calls).
+
+### #18 — Sibling Docker TMPDIR bind-mount and API validation hardening (Changed)
+
+While preparing `docker-compose.yml` for public deployment, we caught a sibling-container workspace mismatch: `app` wrote submissions to `/tmp/leetkob-judge-...` inside its container while spawning `docker run -v /tmp/leetkob-judge-...:/workspace` against `/var/run/docker.sock` on the host, where that directory did not exist. We mapped a dedicated shared staging path (`TMPDIR=/tmp/leetkob-sandbox` mounted identically into `app`), ensured `judgeInSandbox` initializes `os.tmpdir()` recursively, aligned `src/server.ts` `LLM_TIMEOUT_MS` to `25000ms` so multi-model fallback can finish before the review limit fires, and rejected invalid `closesAt` dates, negative/non-finite deductions, and cross-class TA submissions.
+
+### #19 — CI Docker run exposed missing stdin forwarding (`-i`), Alpine `/root` stat false positive, and missing image check (Fixed)
+
+Running the real Docker sandbox suite in GitHub Actions uncovered three container-runtime defects that did not appear without `leetkob-sandbox:latest`:
+
+1. **`docker run` lacked `-i` (`src/sandbox/runner.ts`):** Without `-i`, Docker closed stdin immediately, causing compliant C++ programs reading `std::cin` (like `baseline` and `sort-merge`) to hit EOF and score `WA`. Added `-i` to `buildDockerRunArgs` and asserted it in `test/unit/sandbox.test.ts`.
+2. **`attack-8-no-mounts.cpp` checked `stat("/root")`:** Every Alpine image contains an empty mode-`0700` `/root` directory, so `stat("/root")` falsely reported a host mount even when UID 1000 could not open it. Replaced the `/root` `stat` check with `opendir("/root")` plus `/proc/mounts` inspection against an allowlist (`/` + `/tmp` + `/workspace` + `/sbin/docker-init` + `/etc/{hosts,hostname,resolv.conf}` + `/proc/*`, `/sys/*`, `/dev/*`) and `docker.sock` checks.
+3. **`npm test` vs `npm run test:sandbox` in CI:** Ubuntu runners already have Docker running, so `isDockerDaemonAvailable()` returned `true` even in the `test` job where `Dockerfile.sandbox` is not built. Added `isSandboxImageAvailable()` so container tests require both daemon and `leetkob-sandbox:latest` image (and fail loudly when `REQUIRE_DOCKER=1`).

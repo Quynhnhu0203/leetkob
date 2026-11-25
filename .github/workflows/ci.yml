@@ -71,6 +71,8 @@ jobs:
       - name: Build sandbox docker image
         run: docker build -f Dockerfile.sandbox -t leetkob-sandbox:latest .
       - name: Run sandbox attack test suite
+        env:
+          REQUIRE_DOCKER: "1"
         run: npm run test:sandbox
 
   secrets:
