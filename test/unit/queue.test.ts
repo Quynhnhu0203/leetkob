@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { InMemorySubmissionQueue } from "../../src/queue/queue.js";
 import { JudgeWorker } from "../../src/queue/worker.js";
 import { InMemoryStore } from "../../src/store.js";
+import { buildApp } from "../../src/app.js";
 import type { JudgeResult } from "../../src/sandbox/runner.js";
 
 describe("Queue and Worker — judged exactly once", () => {
@@ -23,16 +24,16 @@ describe("Queue and Worker — judged exactly once", () => {
     expect(third).toBeUndefined();
   });
 
-  it("stop the worker, submit, start worker again, and submission is judged exactly once", async () => {
+  it("HTTP submit enqueues without direct judging; stopping and starting worker judges exactly once", async () => {
     const store = new InMemoryStore({
-      classes: [{ id: 1, taIds: [10] }],
+      users: [{ id: 201, role: "student", token: "tok-stu" }],
+      classes: [{ id: 1, taIds: [10], studentIds: [201] }],
       labs: [{ id: 1, classId: 1, closesAt: new Date(Date.now() + 100000) }],
     });
     await store.addConstraint(1, { id: "C1", text: "Do not use std::sort", deduction: 3 });
     await store.addTest(1, { input: "5\n", expectedOutput: "5\n" });
 
     const queue = new InMemorySubmissionQueue();
-
     let judgeCount = 0;
     const fakeJudge = vi.fn().mockImplementation((): Promise<JudgeResult> => {
       judgeCount++;
@@ -47,7 +48,7 @@ describe("Queue and Worker — judged exactly once", () => {
     const fakeReviewer = vi.fn().mockResolvedValue([
       {
         labId: 1,
-        submissionId: 101,
+        submissionId: 0,
         constraintId: "C1",
         verdict: "pass" as const,
         evidence: [],
@@ -61,49 +62,74 @@ describe("Queue and Worker — judged exactly once", () => {
       store,
       judgeFn: fakeJudge,
       reviewerFn: fakeReviewer,
+      pollIntervalMs: 10,
     });
 
-    // 1. Worker is stopped
+    const app = buildApp({ store, queue });
+
+    // 1. Worker is stopped: submit via HTTP API
     worker.stop();
     expect(worker.running).toBe(false);
 
-    // 2. Student submits while worker is stopped
-    const sub = await store.createSubmission({
-      labId: 1,
-      studentId: 201,
-      code: "int main() { return 0; }",
+    const submitRes = await app.inject({
+      method: "POST",
+      url: "/v1/labs/1/submissions",
+      headers: { authorization: "Bearer tok-stu", "content-type": "application/json" },
+      payload: JSON.stringify({ code: "int main() { return 0; }" }),
     });
-    await queue.enqueue({ submissionId: sub.id, labId: 1, code: sub.code });
+    expect(submitRes.statusCode).toBe(202);
+    const created = submitRes.json<{ id: number; status: string }>();
+    expect(created.status).toBe("queued");
 
-    // Verify submission is still queued and not judged yet
-    const currentSub = await store.submission(sub.id);
-    expect(currentSub?.status).toBe("queued");
+    // Even after a brief delay, request handler MUST NOT judge directly while worker is stopped
+    await new Promise((r) => setTimeout(r, 40));
+    const whileStopped = await store.submission(created.id);
+    expect(whileStopped?.status).toBe("queued");
     expect(judgeCount).toBe(0);
+    expect(await queue.pendingCount()).toBe(1);
 
-    // 3. Start the worker and process
-    const result = await worker.processNext();
-    expect(result?.judged).toBe(true);
+    // 2. Start the worker -> dequeues and judges the submission
+    worker.start();
+    await new Promise((r) => setTimeout(r, 80));
+    worker.stop();
 
-    // Verify submission is now judged
-    const judgedSub = await store.submission(sub.id);
+    const judgedSub = await store.submission(created.id);
     expect(judgedSub?.status).toBe("judged");
     expect(judgedSub?.testVerdict).toBe("AC");
     expect(judgeCount).toBe(1);
 
-    // Verify verdicts landed in review queue
     const reviewQueue = await store.getReviewQueue(1);
     expect(reviewQueue.length).toBe(1);
-    expect(reviewQueue[0]?.constraintId).toBe("C1");
-    expect(reviewQueue[0]?.verdict).toBe("pass");
+    expect(reviewQueue[0]?.submissionId).toBe(created.id);
 
-    // 4. If processed again or re-enqueued, judged exactly once: no duplicate verdicts
-    await queue.enqueue({ submissionId: sub.id, labId: 1, code: sub.code });
-    const secondResult = await worker.processNext();
-    expect(secondResult?.judged).toBe(false);
+    // 3. Re-enqueuing and restarting worker still judges exactly once (idempotent)
+    await queue.enqueue({ submissionId: created.id, labId: 1, code: "int main() { return 0; }" });
+    worker.start();
+    await new Promise((r) => setTimeout(r, 80));
+    worker.stop();
+
     expect(judgeCount).toBe(1);
+    expect((await store.getReviewQueue(1)).length).toBe(1);
+  });
 
-    const reviewQueueAfter = await store.getReviewQueue(1);
-    expect(reviewQueueAfter.length).toBe(1); // exactly one set of verdicts
+  it("rejects submissions exceeding 64 KB code limit (FAQ-05)", async () => {
+    const store = new InMemoryStore({
+      users: [{ id: 201, role: "student", token: "tok-stu" }],
+      classes: [{ id: 1, taIds: [10], studentIds: [201] }],
+      labs: [{ id: 1, classId: 1, closesAt: new Date(Date.now() + 100000) }],
+    });
+    const queue = new InMemorySubmissionQueue();
+    const app = buildApp({ store, queue });
+
+    const oversizedCode = "a".repeat(65537);
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/labs/1/submissions",
+      headers: { authorization: "Bearer tok-stu", "content-type": "application/json" },
+      payload: JSON.stringify({ code: oversizedCode }),
+    });
+    expect(res.statusCode).toBe(413);
+    expect(await queue.pendingCount()).toBe(0);
   });
 
   it("does not call constraint reviewer when code fails testcases (WA)", async () => {

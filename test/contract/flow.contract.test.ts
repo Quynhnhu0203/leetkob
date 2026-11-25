@@ -107,7 +107,10 @@ describe("End-to-End Flow — Rubric Criterion 1", () => {
       reviewerFn: (code, lab, constraints) => reviewConstraints(code, lab, constraints, fakeModel),
     });
 
-    const app = buildApp({ store, queue, worker });
+    let currentTime = new Date("2026-11-25T10:00:00.000Z");
+    const labDeadline = new Date("2026-11-25T11:00:00.000Z");
+
+    const app = buildApp({ store, queue, now: () => currentTime });
 
     // Step 1: As TA (ta_a), create lab in Class 1
     const createLabRes = await app.inject({
@@ -118,7 +121,7 @@ describe("End-to-End Flow — Rubric Criterion 1", () => {
         classId: 1,
         name: "Lab 1 — sort-merge",
         statement: "Sort an array of numbers using merge sort.",
-        closesAt: new Date(Date.now() - 1000).toISOString(), // closed lab for publishing test
+        closesAt: labDeadline.toISOString(),
       }),
     });
     expect(createLabRes.statusCode).toBe(201);
@@ -244,6 +247,9 @@ describe("End-to-End Flow — Rubric Criterion 1", () => {
       headers: { authorization: "Bearer tok-ta-b" },
     });
     expect(otherTaQueue.statusCode).toBe(404);
+
+    // Advance clock past lab deadline so publishing is eligible
+    currentTime = new Date("2026-11-25T12:00:00.000Z");
 
     // Step 7: Publishing fails while pending reviews exist
     const publishAttempt = await app.inject({
