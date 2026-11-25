@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -96,6 +97,29 @@ describe("Sandbox Configuration and 9 Requirements", () => {
       maxOutputBytes: 1024,
     });
     expect(res.timedOut).toBe(true);
+  });
+
+  it("creates nested TMPDIR directory if absent before staging sandbox files", async () => {
+    const nestedTmp = path.join(os.tmpdir(), `leetkob-nested-${Date.now()}`, "sub");
+    const prevTmpdir = process.env.TMPDIR;
+    const prevTemp = process.env.TEMP;
+    const prevTmp = process.env.TMP;
+    process.env.TMPDIR = nestedTmp;
+    process.env.TEMP = nestedTmp;
+    process.env.TMP = nestedTmp;
+    try {
+      const res = await judgeInSandbox("invalid c++ code ???", []);
+      expect(res.compileSuccess).toBe(false);
+      expect(fs.existsSync(nestedTmp)).toBe(true);
+    } finally {
+      if (prevTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = prevTmpdir;
+      if (prevTemp === undefined) delete process.env.TEMP;
+      else process.env.TEMP = prevTemp;
+      if (prevTmp === undefined) delete process.env.TMP;
+      else process.env.TMP = prevTmp;
+      await fs.promises.rm(path.dirname(nestedTmp), { recursive: true, force: true });
+    }
   });
 });
 

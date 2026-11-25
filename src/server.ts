@@ -91,10 +91,15 @@ try {
 }
 
 const port = Number(process.env.PORT || 3000);
+const rawTimeout = Number(process.env.LLM_TIMEOUT_MS || 25000);
+const llmTimeoutMs = Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : 25000;
 const store = new InMemoryStore(DEFAULT_SEED);
 const queue = new InMemorySubmissionQueue();
 const modelClient = process.env.GEMINI_API_KEY
-  ? new GeminiModelClient({ logFilePath: process.env.LLM_CALL_LOG_PATH || "server-call-log.jsonl" })
+  ? new GeminiModelClient({
+      logFilePath: process.env.LLM_CALL_LOG_PATH || "server-call-log.jsonl",
+      timeoutMs: llmTimeoutMs,
+    })
   : new OfflineFakeModelClient();
 
 // Separate background worker judging submissions from the queue
@@ -103,7 +108,10 @@ const worker = new JudgeWorker({
   queue,
   store,
   reviewerFn: (code, lab, constraints) =>
-    reviewConstraints(code, lab, constraints, modelClient, { labCallCounts }),
+    reviewConstraints(code, lab, constraints, modelClient, {
+      labCallCounts,
+      timeoutMs: llmTimeoutMs,
+    }),
 });
 worker.start();
 

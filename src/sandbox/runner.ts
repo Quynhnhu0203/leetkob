@@ -259,6 +259,7 @@ export async function judgeInSandbox(
   limits: Partial<SandboxLimits> = {},
 ): Promise<JudgeResult> {
   const mergedLimits: SandboxLimits = { ...DEFAULT_SANDBOX_LIMITS, ...limits };
+  await fs.mkdir(os.tmpdir(), { recursive: true });
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "leetkob-judge-"));
 
   try {
