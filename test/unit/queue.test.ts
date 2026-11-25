@@ -173,4 +173,47 @@ describe("Queue and Worker — judged exactly once", () => {
     const queueItems = await store.getReviewQueue(1);
     expect(queueItems.length).toBe(0);
   });
+
+  it("rejects cross-class TA submission and invalid closesAt / negative deduction (404 / 400)", async () => {
+    const store = new InMemoryStore({
+      users: [
+        { id: 10, role: "ta", token: "tok-ta-a" },
+        { id: 20, role: "ta", token: "tok-ta-b" },
+      ],
+      classes: [
+        { id: 1, taIds: [10] },
+        { id: 2, taIds: [20] },
+      ],
+      labs: [{ id: 1, classId: 1, closesAt: new Date(Date.now() + 100000) }],
+    });
+    const queue = new InMemorySubmissionQueue();
+    const app = buildApp({ store, queue });
+
+    // Cross-class TA cannot submit into Class 1 lab
+    const crossSubmit = await app.inject({
+      method: "POST",
+      url: "/v1/labs/1/submissions",
+      headers: { authorization: "Bearer tok-ta-b", "content-type": "application/json" },
+      payload: JSON.stringify({ code: "int main() {}" }),
+    });
+    expect(crossSubmit.statusCode).toBe(404);
+
+    // Invalid closesAt returns 400 validation instead of 500
+    const badDateLab = await app.inject({
+      method: "POST",
+      url: "/v1/labs",
+      headers: { authorization: "Bearer tok-ta-a", "content-type": "application/json" },
+      payload: JSON.stringify({ classId: 1, name: "Lab X", closesAt: "not-a-date" }),
+    });
+    expect(badDateLab.statusCode).toBe(400);
+
+    // Negative deduction returns 400 validation
+    const badDeduction = await app.inject({
+      method: "POST",
+      url: "/v1/labs/1/constraints",
+      headers: { authorization: "Bearer tok-ta-a", "content-type": "application/json" },
+      payload: JSON.stringify({ id: "C9", text: "Rule", deduction: -2 }),
+    });
+    expect(badDeduction.statusCode).toBe(400);
+  });
 });

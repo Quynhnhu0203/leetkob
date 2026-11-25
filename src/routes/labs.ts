@@ -80,6 +80,9 @@ export function registerLabRoutes(app: FastifyInstance, store: Store): void {
     const closesAt = body.closesAt
       ? new Date(body.closesAt)
       : new Date(Date.now() + 7 * 24 * 3600 * 1000);
+    if (Number.isNaN(closesAt.getTime())) {
+      return sendProblem(reply, "validation", "closesAt must be a valid ISO timestamp.");
+    }
     const lab = await store.createLab({
       classId: body.classId,
       name: body.name ?? "Sorting Lab",
@@ -128,8 +131,18 @@ export function registerLabRoutes(app: FastifyInstance, store: Store): void {
       return sendProblem(reply, "invalid-json", "Malformed JSON body.");
     }
 
-    if (!body.id || !body.text || typeof body.deduction !== "number") {
-      return sendProblem(reply, "validation", "id, text, and deduction are required.");
+    if (
+      !body.id ||
+      !body.text ||
+      typeof body.deduction !== "number" ||
+      !Number.isFinite(body.deduction) ||
+      body.deduction < 0
+    ) {
+      return sendProblem(
+        reply,
+        "validation",
+        "id, text, and a non-negative deduction are required.",
+      );
     }
 
     const constraint: Constraint = {
