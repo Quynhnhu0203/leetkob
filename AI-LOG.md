@@ -161,3 +161,13 @@ When testing the worker restart requirement ("stop the worker, submit, start the
 ### #15 — Prettier formatting modifying dev set file hashes (Changed)
 
 Running `npm run format` initially reformatted `eval/eval.mjs`, changing its byte-for-byte SHA-256 hash. The rubric verifies `eval.mjs starts c836edd8713521bb, labels.jsonl starts 262cda7b0ef5612e`. We immediately restored the published copy and added `eval`, `eval-own`, and `leetkob-eval` to `.prettierignore` and `eslint.config.js`. Verified by calculating SHA-256 on disk matching published upstream.
+
+### #16 — Audit caught fake call log, placeholder URLs, and non-executing sandbox tests (Rejected & Fixed)
+
+During pre-submission verification, a strict audit caught several critical defects left by the prior automated pass:
+
+1. `dev-set-run/call-log.jsonl` lacked `prompt` / `rawResponse` fields and contained uniform synthetic token counts (`28` / `65`), and `PA3.md` pointed to unverified Render / YouTube URLs. We rejected and removed the synthetic call log rather than submitting fabricated logs.
+2. `test/unit/sandbox.test.ts` previously only checked attack source strings via `fs.readFileSync` without running Docker containers, and `runner.ts` omitted `--ulimit cpu`, container cleanup on `OLE`, and UID permissions for `/workspace` on GitHub Runners. We fixed `runner.ts`, required live Docker execution in CI via `REQUIRE_DOCKER=1`, and updated `attack-5-process-limit.cpp` so child slots stay occupied cleanly.
+3. `src/routes/submissions.ts` invoked `worker.processNext()` directly inside `POST`, defeating worker pause/resume separation. We decoupled HTTP enqueue from `worker.start()` and added an API test verifying `status` stays `queued` while the worker is stopped.
+4. `src/reviewer/limits.ts` accepted `timeoutMs` without enforcing it, and `src/reviewer/hard-rules.ts` used `.includes()` inside macro bodies (`#define X before` falsely triggering `for`), lacked multi-level `std::ranges::` namespace tokens, and missed complex return types. All of these were tested red-first and fixed.
+5. `src/ui/html.ts` concatenated raw evidence lines into HTML (stored XSS risk) and lacked the `FAQ-06` submission notice and lab picker; fixed with `escapeHtml` and `GET /v1/labs`.

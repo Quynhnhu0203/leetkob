@@ -1,0 +1,26 @@
+services:
+  sandbox-image:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    image: leetkob-sandbox:latest
+    command: ["echo", "leetkob-sandbox ready"]
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - sandbox-image
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      - PORT=3000
+      - REQUIRE_DOCKER=1
+    volumes:
+      # App spawns isolated sibling sandbox containers; student containers NEVER receive docker.sock or .env
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
