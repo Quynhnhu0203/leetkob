@@ -140,6 +140,103 @@ int main() {
     expect(res.verdict).toBe("violation");
     expect(res.evidence?.length).toBe(2);
   });
+
+  it("Trap 5: does not misfire on macros whose values merely contain a banned word as substring", () => {
+    const loopBan = "Do not use loop statements: `for`, `while`, `do`-`while`, `goto`.";
+    const code = `
+#include <iostream>
+#define MY_ZERO before
+#define IS_SORTED sorted_flag
+#define MY_SORT my::sort
+#define STEP_FN redo_step(1)
+namespace my { void sort() {} }
+int redo_step(int x) { return x + 1; }
+int main() {
+    int before = 0, sorted_flag = 1;
+    std::cout << MY_ZERO << " " << IS_SORTED << " " << STEP_FN << "\\n";
+    MY_SORT();
+    return 0;
+}
+`;
+    expect(checkHardRule(code, loopBan).verdict).toBe("pass");
+    expect(checkHardRule(code, c1Text).verdict).toBe("pass");
+  });
+
+  it("Trap 6: does not fire on member method calls like obj.sort() even with using namespace std", () => {
+    const code = `
+#include <iostream>
+using namespace std;
+struct MyBox {
+    MyBox sort() { return *this; }
+};
+int main() {
+    MyBox box;
+    box.sort();
+    return 0;
+}
+`;
+    expect(checkHardRule(code, c1Text).verdict).toBe("pass");
+  });
+
+  it("Trap 7: does not fire on student function returning complex types like std::string", () => {
+    const reverseBan = "Do not use `std::reverse`, `rbegin`, `rend`.";
+    const code = `
+#include <iostream>
+#include <string>
+using namespace std;
+std::string reverse(std::string w) {
+    return w;
+}
+int main() {
+    cout << reverse("abc") << "\\n";
+    return 0;
+}
+`;
+    expect(checkHardRule(code, reverseBan).verdict).toBe("pass");
+  });
+
+  it("Trap 8: does not fire inside C++11 raw string literals", () => {
+    const code = `
+#include <iostream>
+int main() {
+    const char* msg = R"(Do not call std::sort(a, a + n);)";
+    std::cout << msg << "\\n";
+    return 0;
+}
+`;
+    expect(checkHardRule(code, c1Text).verdict).toBe("pass");
+  });
+
+  it("Violation: catches multi-level qualified std::ranges::sort without using namespace std", () => {
+    const code = `
+#include <algorithm>
+#include <vector>
+int main() {
+    std::vector<int> v = {3, 1, 2};
+    std::ranges::sort(v.begin(), v.end());
+    return 0;
+}
+`;
+    const res = checkHardRule(code, c1Text);
+    expect(res.verdict).toBe("violation");
+    expect(res.evidence?.[0]?.text).toContain("std::ranges::sort");
+  });
+
+  it("Violation: catches using-declaration import such as using std::sort;", () => {
+    const code = `
+#include <algorithm>
+#include <vector>
+using std::sort;
+int main() {
+    std::vector<int> v = {3, 1, 2};
+    sort(v.begin(), v.end());
+    return 0;
+}
+`;
+    const res = checkHardRule(code, c1Text);
+    expect(res.verdict).toBe("violation");
+    expect(res.evidence?.some((e) => e.text.includes("sort("))).toBe(true);
+  });
 });
 
 describe("Hard Rules on dev set sort-merge solutions", () => {
