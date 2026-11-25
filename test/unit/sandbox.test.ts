@@ -1,29 +1,44 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
   buildDockerRunArgs,
   compareTokenByToken,
   DEFAULT_SANDBOX_LIMITS,
+  isDockerDaemonAvailable,
+  judgeInSandbox,
   runProcessLimited,
 } from "../../src/sandbox/runner.js";
 
+const execFileAsync = promisify(execFile);
+
 describe("Sandbox Configuration and 9 Requirements", () => {
-  it("has default limits meeting brief requirements", () => {
+  it("has default limits meeting brief §5 and FAQ-05 requirements", () => {
     expect(DEFAULT_SANDBOX_LIMITS.network).toBe("none");
     expect(DEFAULT_SANDBOX_LIMITS.cpuLimitSec).toBe(2);
+    expect(DEFAULT_SANDBOX_LIMITS.wallClockTimeoutMs).toBe(6000);
     expect(DEFAULT_SANDBOX_LIMITS.memoryLimitBytes).toBe(256 * 1024 * 1024);
-    expect(DEFAULT_SANDBOX_LIMITS.pidsLimit).toBe(64);
+    expect(DEFAULT_SANDBOX_LIMITS.memorySwapBytes).toBe(256 * 1024 * 1024);
+    expect(DEFAULT_SANDBOX_LIMITS.pidsLimit).toBe(16);
+    expect(DEFAULT_SANDBOX_LIMITS.maxOutputBytes).toBe(1024 * 1024);
   });
+
   it("enforces all 9 security constraints in docker arguments", () => {
     const args = buildDockerRunArgs({
       command: ["./solution"],
       sourceDir: "/tmp/isolated",
+      readOnlyWorkspace: true,
     });
 
     // 1. no network
     expect(args).toContain("--network");
     expect(args[args.indexOf("--network") + 1]).toBe("none");
+
+    // 2. CPU time limit (--ulimit cpu)
+    expect(args).toContain("--ulimit");
+    expect(args[args.indexOf("--ulimit") + 1]).toBe("cpu=2:3");
 
     // 4. memory limit, swap included (256MB)
     expect(args).toContain("--memory");
@@ -31,16 +46,20 @@ describe("Sandbox Configuration and 9 Requirements", () => {
     expect(args).toContain("--memory-swap");
     expect(args[args.indexOf("--memory-swap") + 1]).toBe(`${256 * 1024 * 1024}b`);
 
-    // 5. process limit (64)
+    // 5. process limit (16 per FAQ-05)
     expect(args).toContain("--pids-limit");
-    expect(args[args.indexOf("--pids-limit") + 1]).toBe("64");
+    expect(args[args.indexOf("--pids-limit") + 1]).toBe("16");
 
-    // 7. non-root user (1000:1000)
+    // 7. non-root user (1000:1000) + read-only rootfs + dropped caps
     expect(args).toContain("--user");
     expect(args[args.indexOf("--user") + 1]).toBe("1000:1000");
+    expect(args).toContain("--read-only");
+    expect(args).toContain("--cap-drop");
+    expect(args[args.indexOf("--cap-drop") + 1]).toBe("ALL");
 
-    // 8. no host mounts and no Docker socket
+    // 8. no host mounts and no Docker socket; workspace mounted :ro during execution
     const joined = args.join(" ");
+    expect(joined).toContain("/tmp/isolated:/workspace:ro");
     expect(joined).not.toContain("/var/run/docker.sock");
     expect(joined).not.toContain("/run/docker.sock");
     expect(joined).not.toContain("--privileged");
@@ -79,57 +98,184 @@ describe("Sandbox Configuration and 9 Requirements", () => {
   });
 });
 
-describe("The 9 Attack Submissions exist and implement threat scenarios", () => {
+describe("The 9 Attack Submissions (source checks + live Docker execution when available)", () => {
   const attacksDir = path.resolve(__dirname, "../attacks");
+  const sampleTest = [{ id: 1, input: "", expectedOutput: "OK" }];
+  let dockerReady = false;
 
-  it("attack 1: no network (attempts socket connection to 8.8.8.8:80)", () => {
-    const code = fs.readFileSync(path.join(attacksDir, "attack-1-network.cpp"), "utf8");
-    expect(code).toContain("socket");
-    expect(code).toContain("connect");
-    expect(code).toContain("8.8.8.8");
+  beforeAll(async () => {
+    dockerReady = await isDockerDaemonAvailable();
+    if (process.env.REQUIRE_DOCKER === "1" && !dockerReady) {
+      throw new Error("REQUIRE_DOCKER=1 is set in CI, so Docker must be available.");
+    }
   });
 
-  it("attack 2: CPU time limit (infinite CPU calculation loop)", () => {
+  it("attack files exist for all 9 minimums", () => {
+    const expectedFiles = [
+      "attack-1-network.cpp",
+      "attack-2-cputime.cpp",
+      "attack-3-walltime.cpp",
+      "attack-4-memory.cpp",
+      "attack-5-process-limit.cpp",
+      "attack-6-output-limit.cpp",
+      "attack-7-non-root.cpp",
+      "attack-8-no-mounts.cpp",
+      "attack-9-no-secrets.cpp",
+    ];
+    for (const file of expectedFiles) {
+      expect(fs.existsSync(path.join(attacksDir, file))).toBe(true);
+    }
+  });
+
+  it("baseline compliant C++ solution compiles inside container and passes (AC)", async () => {
+    if (!dockerReady) return;
+    const okCode = `#include <iostream>\nint main(){ int a,b; std::cin>>a>>b; std::cout<<(a+b)<<"\\n"; }`;
+    const res = await judgeInSandbox(okCode, [{ id: 1, input: "2 3\n", expectedOutput: "5" }]);
+    expect(res.compileSuccess).toBe(true);
+    expect(res.verdict).toBe("AC");
+  }, 25000);
+
+  it("attack 1: no network — socket connect fails in sandbox", async () => {
+    const code = fs.readFileSync(path.join(attacksDir, "attack-1-network.cpp"), "utf8");
+    expect(code).toContain("8.8.8.8");
+    if (!dockerReady) return;
+
+    const res = await judgeInSandbox(code, sampleTest);
+    expect(res.compileSuccess).toBe(true);
+    expect(res.verdict).toBe("RE");
+    expect(res.testResults[0]?.output ?? "").not.toContain("BREACH");
+  }, 25000);
+
+  it("attack 2: CPU time limit kills infinite CPU loop via ulimit before wall clock", async () => {
     const code = fs.readFileSync(path.join(attacksDir, "attack-2-cputime.cpp"), "utf8");
     expect(code).toContain("while (true)");
-  });
+    if (!dockerReady) return;
 
-  it("attack 3: wall-clock limit (sleeps for 120 seconds)", () => {
+    const res = await judgeInSandbox(code, sampleTest, {
+      cpuLimitSec: 1,
+      wallClockTimeoutMs: 8000,
+    });
+    expect(res.compileSuccess).toBe(true);
+    expect(res.verdict).toBe("TLE");
+    expect(res.testResults[0]?.timeMs ?? 9999).toBeLessThan(6500);
+  }, 25000);
+
+  it("attack 3: wall-clock limit kills sleeping container completely", async () => {
     const code = fs.readFileSync(path.join(attacksDir, "attack-3-walltime.cpp"), "utf8");
-    expect(code).toContain("sleep");
-  });
+    expect(code).toContain("sleep_for");
+    if (!dockerReady) return;
 
-  it("attack 4: memory limit (allocates 512MB and reads back so allocation cannot be optimized)", () => {
+    const res = await judgeInSandbox(code, sampleTest, {
+      cpuLimitSec: 5,
+      wallClockTimeoutMs: 1200,
+    });
+    expect(res.compileSuccess).toBe(true);
+    expect(res.verdict).toBe("TLE");
+
+    // Verify container itself was killed and removed
+    if (res.lastContainerName) {
+      const { stdout } = await execFileAsync("docker", [
+        "ps",
+        "-aq",
+        "--filter",
+        `name=${res.lastContainerName}`,
+      ]);
+      expect(stdout.trim()).toBe("");
+    }
+  }, 25000);
+
+  it("attack 4: memory limit (swap included, read back) triggers cgroup OOM (MLE)", async () => {
     const code = fs.readFileSync(path.join(attacksDir, "attack-4-memory.cpp"), "utf8");
-    expect(code).toContain("512 * 1024 * 1024");
     expect(code).toContain("sum += mem[i]");
-  });
+    if (!dockerReady) return;
 
-  it("attack 5: process limit (fork bomb)", () => {
+    const res = await judgeInSandbox(code, sampleTest, {
+      memoryLimitBytes: 256 * 1024 * 1024,
+      memorySwapBytes: 256 * 1024 * 1024,
+    });
+    expect(res.compileSuccess).toBe(true);
+    expect(res.verdict).toBe("MLE");
+  }, 25000);
+
+  it("attack 5: process limit blocks fork bomb via --pids-limit", async () => {
     const code = fs.readFileSync(path.join(attacksDir, "attack-5-process-limit.cpp"), "utf8");
     expect(code).toContain("fork()");
-  });
+    if (!dockerReady) return;
 
-  it("attack 6: output limit (infinite stdout flood)", () => {
+    const res = await judgeInSandbox(code, sampleTest, {
+      pidsLimit: 16,
+      wallClockTimeoutMs: 5000,
+    });
+    expect(res.compileSuccess).toBe(true);
+    expect(res.verdict).toBe("RE");
+  }, 25000);
+
+  it("attack 6: output limit stops stdout flood and cleans up container (OLE)", async () => {
     const code = fs.readFileSync(path.join(attacksDir, "attack-6-output-limit.cpp"), "utf8");
     expect(code).toContain("while (true)");
-    expect(code).toContain("cout");
-  });
+    if (!dockerReady) return;
 
-  it("attack 7: non-root user (attempts getuid() == 0 and write to /etc)", () => {
+    const res = await judgeInSandbox(code, sampleTest, {
+      maxOutputBytes: 65536,
+      wallClockTimeoutMs: 5000,
+    });
+    expect(res.compileSuccess).toBe(true);
+    expect(res.verdict).toBe("OLE");
+
+    if (res.lastContainerName) {
+      const { stdout } = await execFileAsync("docker", [
+        "ps",
+        "-aq",
+        "--filter",
+        `name=${res.lastContainerName}`,
+      ]);
+      expect(stdout.trim()).toBe("");
+    }
+  }, 25000);
+
+  it("attack 7: non-root user (uid 1000) cannot write to /etc", async () => {
     const code = fs.readFileSync(path.join(attacksDir, "attack-7-non-root.cpp"), "utf8");
     expect(code).toContain("getuid()");
-    expect(code).toContain("/etc/hacked.txt");
-  });
+    if (!dockerReady) return;
 
-  it("attack 8: no host mounts and no Docker socket (checks /var/run/docker.sock)", () => {
+    const res = await judgeInSandbox(code, sampleTest);
+    expect(res.compileSuccess).toBe(true);
+    expect(res.verdict).toBe("RE");
+    expect(res.testResults[0]?.output ?? "").not.toContain("BREACH");
+  }, 25000);
+
+  it("attack 8: no host mounts and no Docker socket", async () => {
     const code = fs.readFileSync(path.join(attacksDir, "attack-8-no-mounts.cpp"), "utf8");
     expect(code).toContain("/var/run/docker.sock");
-  });
+    if (!dockerReady) return;
 
-  it("attack 9: no secrets (scans env and /proc/1/environ for API keys)", () => {
+    const res = await judgeInSandbox(code, sampleTest);
+    expect(res.compileSuccess).toBe(true);
+    expect(res.verdict).toBe("RE");
+    expect(res.testResults[0]?.output ?? "").not.toContain("BREACH");
+  }, 25000);
+
+  it("attack 9: no secrets in env, /proc/1/environ, or compile-time #include", async () => {
     const code = fs.readFileSync(path.join(attacksDir, "attack-9-no-secrets.cpp"), "utf8");
     expect(code).toContain("GEMINI_API_KEY");
-    expect(code).toContain("/proc/1/environ");
-  });
+    if (!dockerReady) return;
+
+    const prevKey = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = "AIza-fake-host-secret-must-never-leak";
+    try {
+      const res = await judgeInSandbox(code, sampleTest);
+      expect(res.compileSuccess).toBe(true);
+      expect(res.verdict).toBe("RE");
+      expect(res.testResults[0]?.output ?? "").not.toContain("BREACH");
+
+      // Compile-time #include attack cannot read host secrets either
+      const includeAttack = `#include "/app/.env"\nint main() { return 0; }\n`;
+      const compileRes = await judgeInSandbox(includeAttack, sampleTest);
+      expect(compileRes.compileSuccess).toBe(false);
+      expect(compileRes.verdict).toBe("CE");
+    } finally {
+      if (prevKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = prevKey;
+    }
+  }, 25000);
 });

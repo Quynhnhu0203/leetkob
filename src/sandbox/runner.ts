@@ -18,36 +18,86 @@ export interface SandboxLimits {
   dropCapabilities: string[];
 }
 
+// Defaults align with brief §5 minimums and LeeTKOB FAQ-05
 export const DEFAULT_SANDBOX_LIMITS: SandboxLimits = {
   network: "none",
   cpuLimitSec: 2,
-  wallClockTimeoutMs: 4000,
+  wallClockTimeoutMs: 6000, // 3x CPU time per FAQ-05
   memoryLimitBytes: 256 * 1024 * 1024, // 256 MiB
   memorySwapBytes: 256 * 1024 * 1024, // swap included (no extra swap)
-  pidsLimit: 64,
-  maxOutputBytes: 65536, // 64 KiB
+  pidsLimit: 16, // FAQ-05: 16 processes including threads
+  maxOutputBytes: 1024 * 1024, // FAQ-05: 1 MiB max output per test
   user: "1000:1000",
   dropCapabilities: ["ALL"],
 };
 
 export interface BuildDockerArgsOptions {
-  containerName?: string;
-  limits?: Partial<SandboxLimits>;
-  workDir?: string;
-  sourceDir?: string;
+  containerName?: string | undefined;
+  limits?: Partial<SandboxLimits> | undefined;
+  sourceDir?: string | undefined;
+  readOnlyWorkspace?: boolean | undefined;
+  autoRemove?: boolean | undefined;
   command: string[];
 }
 
 /**
- * Builds the hardened argument list for docker run enforcing all 9 sandbox requirements.
+ * Checks whether the Docker daemon is reachable on the host.
+ */
+export async function isDockerDaemonAvailable(): Promise<boolean> {
+  try {
+    await execFileAsync("docker", ["info", "--format", "{{.ServerVersion}}"], {
+      timeout: 5000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Removes a Docker container cleanly if it exists (ignoring errors if already removed).
+ */
+export async function removeContainer(containerName: string): Promise<void> {
+  try {
+    await execFileAsync("docker", ["rm", "-f", containerName], { timeout: 5000 });
+  } catch {
+    // Container may already be removed or never started
+  }
+}
+
+/**
+ * Inspects whether a stopped Docker container was terminated by cgroup OOM killer.
+ */
+async function inspectContainerOomKilled(containerName: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      "docker",
+      ["inspect", "-f", "{{.State.OOMKilled}}", containerName],
+      { timeout: 3000 },
+    );
+    return stdout.trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Builds the hardened argument list for `docker run` enforcing all 9 sandbox minimums.
  */
 export function buildDockerRunArgs(options: BuildDockerArgsOptions): string[] {
   const limits: SandboxLimits = { ...DEFAULT_SANDBOX_LIMITS, ...options.limits };
-  const args: string[] = [
-    "run",
-    "--rm",
+  const cpuHard = limits.cpuLimitSec + 1;
+  const args: string[] = ["run"];
+
+  if (options.autoRemove !== false) {
+    args.push("--rm");
+  }
+
+  args.push(
     "--network",
     limits.network,
+    "--ulimit",
+    `cpu=${limits.cpuLimitSec}:${cpuHard}`,
     "--memory",
     `${limits.memoryLimitBytes}b`,
     "--memory-swap",
@@ -60,19 +110,23 @@ export function buildDockerRunArgs(options: BuildDockerArgsOptions): string[] {
     "no-new-privileges",
     "--cap-drop",
     "ALL",
-  ];
+    "--read-only",
+    "--tmpfs",
+    "/tmp:rw,noexec,nosuid,size=64m",
+  );
 
   if (options.containerName) {
     args.push("--name", options.containerName);
   }
 
-  // Workdir mounting: isolated ephemeral work directory only
+  // Ephemeral isolated workspace only; never host paths or Docker socket
   if (options.sourceDir) {
-    args.push("-v", `${options.sourceDir}:/workspace:rw`);
+    const mode = options.readOnlyWorkspace ? "ro" : "rw";
+    args.push("-v", `${options.sourceDir}:/workspace:${mode}`);
     args.push("-w", "/workspace");
   }
 
-  // Pure clean environment: absolutely no secret or API key passed
+  // Minimal clean environment: zero secrets or API keys
   args.push("-e", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
 
   // Image and command
@@ -92,11 +146,12 @@ export interface JudgeResult {
   verdict: JudgeVerdict;
   compileSuccess: boolean;
   compileOutput: string;
+  lastContainerName?: string | undefined;
   testResults: {
     testId: number;
     verdict: JudgeVerdict;
     timeMs: number;
-    output?: string;
+    output?: string | undefined;
   }[];
 }
 
@@ -120,8 +175,8 @@ export async function runProcessLimited(
   cmd: string,
   args: string[],
   options: {
-    input?: string;
-    cwd?: string;
+    input?: string | undefined;
+    cwd?: string | undefined;
     timeoutMs: number;
     maxOutputBytes: number;
   },
@@ -138,6 +193,7 @@ export async function runProcessLimited(
     let stderr = "";
     let timedOut = false;
     let outputLimitExceeded = false;
+    let settled = false;
 
     const proc = spawn(cmd, args, {
       cwd: options.cwd,
@@ -149,57 +205,53 @@ export async function runProcessLimited(
       proc.kill("SIGKILL");
     }, options.timeoutMs);
 
-    proc.stdout.on("data", (chunk: Buffer) => {
-      if (stdout.length + chunk.length > options.maxOutputBytes) {
+    const handleChunk = (chunk: Buffer, target: "stdout" | "stderr"): void => {
+      if (outputLimitExceeded) return;
+      if (stdout.length + stderr.length + chunk.length > options.maxOutputBytes) {
         outputLimitExceeded = true;
         proc.kill("SIGKILL");
-      } else {
-        stdout += chunk.toString("utf8");
+        return;
       }
-    });
-
-    proc.stderr.on("data", (chunk: Buffer) => {
-      if (stderr.length + chunk.length > options.maxOutputBytes) {
-        outputLimitExceeded = true;
-        proc.kill("SIGKILL");
+      if (target === "stdout") {
+        stdout += chunk.toString("utf8");
       } else {
         stderr += chunk.toString("utf8");
       }
+    };
+
+    proc.stdout.on("data", (chunk: Buffer) => handleChunk(chunk, "stdout"));
+    proc.stderr.on("data", (chunk: Buffer) => handleChunk(chunk, "stderr"));
+
+    proc.stdin.on("error", () => {
+      // Ignore EPIPE if child process exits before consuming stdin
     });
 
     if (options.input !== undefined) {
       proc.stdin.write(options.input);
-      proc.stdin.end();
     }
+    proc.stdin.end();
 
-    proc.on("close", (exitCode, signal) => {
+    const finish = (exitCode: number | null, signal: NodeJS.Signals | null, errMsg?: string) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       resolve({
         exitCode,
         signal,
         stdout,
-        stderr,
+        stderr: errMsg && !stderr ? errMsg : stderr,
         timedOut,
         outputLimitExceeded,
       });
-    });
+    };
 
-    proc.on("error", (err) => {
-      clearTimeout(timer);
-      resolve({
-        exitCode: -1,
-        signal: null,
-        stdout,
-        stderr: err.message,
-        timedOut: false,
-        outputLimitExceeded: false,
-      });
-    });
+    proc.on("close", (exitCode, signal) => finish(exitCode, signal));
+    proc.on("error", (err) => finish(-1, null, err.message));
   });
 }
 
 /**
- * Compiles and executes code in the sandbox against tests.
+ * Compiles and executes C++ code in the hardened Docker sandbox against testcases.
  */
 export async function judgeInSandbox(
   sourceCode: string,
@@ -214,39 +266,54 @@ export async function judgeInSandbox(
     const binFile = path.join(tempDir, "solution");
     await fs.writeFile(srcFile, sourceCode, "utf8");
 
-    // 1. Compile step (inside the sandbox or via g++)
-    // Check if docker is available
-    let hasDocker = false;
-    try {
-      await execFileAsync("docker", ["--version"]);
-      hasDocker = true;
-    } catch {
-      hasDocker = false;
+    if (process.platform !== "win32") {
+      // Allow UID 1000 inside container to write compiled binary regardless of host runner UID
+      await fs.chmod(tempDir, 0o777);
+      await fs.chmod(srcFile, 0o644);
+    }
+
+    const hasDocker = await isDockerDaemonAvailable();
+    if (process.env.REQUIRE_DOCKER === "1" && !hasDocker) {
+      throw new Error("REQUIRE_DOCKER=1 is set, but the Docker daemon is not reachable.");
     }
 
     let compileOutput = "";
     let compileSuccess = false;
 
     if (hasDocker) {
+      const compileContainerName = `judge-compile-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const compileCpuSec = Math.max(mergedLimits.cpuLimitSec, 10);
       const dockerCompileArgs = buildDockerRunArgs({
+        containerName: compileContainerName,
+        limits: {
+          ...mergedLimits,
+          cpuLimitSec: compileCpuSec,
+          pidsLimit: Math.max(mergedLimits.pidsLimit, 32),
+        },
         sourceDir: tempDir,
+        readOnlyWorkspace: false,
+        autoRemove: true,
         command: ["g++", "-std=c++17", "-O2", "-o", "solution", "solution.cpp"],
       });
-      const res = await runProcessLimited("docker", dockerCompileArgs, {
-        timeoutMs: 15000,
-        maxOutputBytes: mergedLimits.maxOutputBytes,
-      });
-      compileSuccess = res.exitCode === 0;
-      compileOutput = res.stderr || res.stdout;
+
+      try {
+        const res = await runProcessLimited("docker", dockerCompileArgs, {
+          timeoutMs: 15000,
+          maxOutputBytes: mergedLimits.maxOutputBytes,
+        });
+        compileSuccess = !res.timedOut && !res.outputLimitExceeded && res.exitCode === 0;
+        compileOutput = res.timedOut ? "Compilation timed out." : res.stderr || res.stdout;
+      } finally {
+        await removeContainer(compileContainerName);
+      }
     } else {
-      // Local fallback for environments without docker daemon
       try {
         const res = await runProcessLimited("g++", ["-std=c++17", "-O2", "-o", binFile, srcFile], {
           timeoutMs: 15000,
           maxOutputBytes: mergedLimits.maxOutputBytes,
         });
-        compileSuccess = res.exitCode === 0;
-        compileOutput = res.stderr;
+        compileSuccess = !res.timedOut && !res.outputLimitExceeded && res.exitCode === 0;
+        compileOutput = res.stderr || res.stdout;
       } catch (e) {
         compileSuccess = false;
         compileOutput = (e as Error).message;
@@ -262,9 +329,15 @@ export async function judgeInSandbox(
       };
     }
 
-    // 2. Run testcases
+    // Make workspace readable/executable for non-root UID 1000 during read-only execution
+    if (process.platform !== "win32") {
+      await fs.chmod(binFile, 0o755);
+      await fs.chmod(tempDir, 0o755);
+    }
+
     const testResults: JudgeResult["testResults"] = [];
     let overallVerdict: JudgeVerdict = "AC";
+    let lastContainerName: string | undefined;
 
     for (const t of tests) {
       const startTime = Date.now();
@@ -273,49 +346,57 @@ export async function judgeInSandbox(
 
       if (hasDocker) {
         const containerName = `judge-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        lastContainerName = containerName;
+        // Disable autoRemove so we can inspect State.OOMKilled reliably, then always rm -f in finally
         const dockerRunArgs = buildDockerRunArgs({
           containerName,
           limits: mergedLimits,
           sourceDir: tempDir,
+          readOnlyWorkspace: true,
+          autoRemove: false,
           command: ["./solution"],
         });
 
-        const runRes = await runProcessLimited("docker", dockerRunArgs, {
-          input: t.input,
-          timeoutMs: mergedLimits.wallClockTimeoutMs,
-          maxOutputBytes: mergedLimits.maxOutputBytes,
-        });
+        try {
+          const runRes = await runProcessLimited("docker", dockerRunArgs, {
+            input: t.input,
+            timeoutMs: mergedLimits.wallClockTimeoutMs,
+            maxOutputBytes: mergedLimits.maxOutputBytes,
+          });
 
-        const elapsed = Date.now() - startTime;
-        actualOutput = runRes.stdout;
+          const elapsed = Date.now() - startTime;
+          actualOutput = runRes.stdout;
 
-        if (runRes.outputLimitExceeded) {
-          testVerdict = "OLE";
-        } else if (runRes.timedOut) {
-          testVerdict = "TLE";
-          // Ensure container is forcefully killed
-          try {
-            await execFileAsync("docker", ["rm", "-f", containerName]);
-          } catch {
-            // ignore cleanup error
+          if (runRes.outputLimitExceeded) {
+            testVerdict = "OLE";
+          } else if (runRes.timedOut || runRes.exitCode === 152) {
+            // exitCode 152 = 128 + SIGXCPU (24)
+            testVerdict = "TLE";
+          } else if (runRes.exitCode === 137) {
+            const oomKilled = await inspectContainerOomKilled(containerName);
+            if (oomKilled) {
+              testVerdict = "MLE";
+            } else if (elapsed >= mergedLimits.cpuLimitSec * 1000 * 0.85) {
+              testVerdict = "TLE";
+            } else {
+              testVerdict = "RE";
+            }
+          } else if (runRes.exitCode !== 0) {
+            testVerdict = "RE";
+          } else if (!compareTokenByToken(actualOutput, t.expectedOutput)) {
+            testVerdict = "WA";
           }
-        } else if (runRes.exitCode === 137) {
-          // Exit 137 indicates SIGKILL (either OOM or timeout)
-          testVerdict = elapsed >= mergedLimits.wallClockTimeoutMs ? "TLE" : "MLE";
-        } else if (runRes.exitCode !== 0) {
-          testVerdict = "RE";
-        } else if (!compareTokenByToken(actualOutput, t.expectedOutput)) {
-          testVerdict = "WA";
-        }
 
-        testResults.push({
-          testId: t.id,
-          verdict: testVerdict,
-          timeMs: elapsed,
-          output: actualOutput,
-        });
+          testResults.push({
+            testId: t.id,
+            verdict: testVerdict,
+            timeMs: elapsed,
+            output: actualOutput,
+          });
+        } finally {
+          await removeContainer(containerName);
+        }
       } else {
-        // Fallback local runner
         const runRes = await runProcessLimited(binFile, [], {
           input: t.input,
           timeoutMs: mergedLimits.wallClockTimeoutMs,
@@ -351,6 +432,7 @@ export async function judgeInSandbox(
       verdict: overallVerdict,
       compileSuccess: true,
       compileOutput,
+      lastContainerName,
       testResults,
     };
   } finally {
