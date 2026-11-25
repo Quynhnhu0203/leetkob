@@ -8,4 +8,3 @@ node eval/eval.mjs --data eval --predictions dev-set-run/predictions.jsonl > dev
 ```
 
 This directory intentionally holds no synthetic/mocked log; run the commands above and commit `predictions.jsonl`, `call-log.jsonl`, and `eval-report.txt` before final submission.
-

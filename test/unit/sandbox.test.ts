@@ -32,7 +32,8 @@ describe("Sandbox Configuration and 9 Requirements", () => {
       readOnlyWorkspace: true,
     });
 
-    // 1. no network
+    // 1. no network & init reaper
+    expect(args).toContain("--init");
     expect(args).toContain("--network");
     expect(args[args.indexOf("--network") + 1]).toBe("none");
 

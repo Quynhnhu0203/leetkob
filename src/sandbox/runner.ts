@@ -87,7 +87,7 @@ async function inspectContainerOomKilled(containerName: string): Promise<boolean
 export function buildDockerRunArgs(options: BuildDockerArgsOptions): string[] {
   const limits: SandboxLimits = { ...DEFAULT_SANDBOX_LIMITS, ...options.limits };
   const cpuHard = limits.cpuLimitSec + 1;
-  const args: string[] = ["run"];
+  const args: string[] = ["run", "--init"];
 
   if (options.autoRemove !== false) {
     args.push("--rm");
@@ -329,9 +329,8 @@ export async function judgeInSandbox(
       };
     }
 
-    // Make workspace readable/executable for non-root UID 1000 during read-only execution
+    // Lock workspace dir mode (owned by host UID) before read-only execution; g++ binary already has 0755
     if (process.platform !== "win32") {
-      await fs.chmod(binFile, 0o755);
       await fs.chmod(tempDir, 0o755);
     }
 
