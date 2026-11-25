@@ -9,6 +9,7 @@ import {
   compareTokenByToken,
   DEFAULT_SANDBOX_LIMITS,
   isDockerDaemonAvailable,
+  isSandboxImageAvailable,
   judgeInSandbox,
   runProcessLimited,
 } from "../../src/sandbox/runner.js";
@@ -33,7 +34,8 @@ describe("Sandbox Configuration and 9 Requirements", () => {
       readOnlyWorkspace: true,
     });
 
-    // 1. no network & init reaper
+    // 1. no network, interactive stdin, and init reaper
+    expect(args).toContain("-i");
     expect(args).toContain("--init");
     expect(args).toContain("--network");
     expect(args[args.indexOf("--network") + 1]).toBe("none");
@@ -129,9 +131,13 @@ describe("The 9 Attack Submissions (source checks + live Docker execution when a
   let dockerReady = false;
 
   beforeAll(async () => {
-    dockerReady = await isDockerDaemonAvailable();
+    const daemonAvailable = await isDockerDaemonAvailable();
+    const imageBuilt = daemonAvailable && (await isSandboxImageAvailable());
+    dockerReady = daemonAvailable && imageBuilt;
     if (process.env.REQUIRE_DOCKER === "1" && !dockerReady) {
-      throw new Error("REQUIRE_DOCKER=1 is set in CI, so Docker must be available.");
+      throw new Error(
+        "REQUIRE_DOCKER=1 is set in CI, so Docker daemon and leetkob-sandbox:latest must both be available.",
+      );
     }
   });
 

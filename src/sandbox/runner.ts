@@ -55,6 +55,20 @@ export async function isDockerDaemonAvailable(): Promise<boolean> {
 }
 
 /**
+ * Checks whether the compiled sandbox image is present locally.
+ */
+export async function isSandboxImageAvailable(image = "leetkob-sandbox:latest"): Promise<boolean> {
+  try {
+    await execFileAsync("docker", ["image", "inspect", image], {
+      timeout: 5000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Removes a Docker container cleanly if it exists (ignoring errors if already removed).
  */
 export async function removeContainer(containerName: string): Promise<void> {
@@ -87,7 +101,8 @@ async function inspectContainerOomKilled(containerName: string): Promise<boolean
 export function buildDockerRunArgs(options: BuildDockerArgsOptions): string[] {
   const limits: SandboxLimits = { ...DEFAULT_SANDBOX_LIMITS, ...options.limits };
   const cpuHard = limits.cpuLimitSec + 1;
-  const args: string[] = ["run", "--init"];
+  // Pass -i so host writes on proc.stdin reach the compiled C++ solution's stdin
+  const args: string[] = ["run", "-i", "--init"];
 
   if (options.autoRemove !== false) {
     args.push("--rm");
