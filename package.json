@@ -14,6 +14,7 @@
     "test:sandbox": "vitest run test/unit/sandbox.test.ts",
     "test:contract": "vitest run test/contract",
     "checker": "tsx src/checker-cli.ts",
+    "eval:run": "tsx src/checker-cli.ts --data eval --output dev-set-run/predictions.jsonl --log dev-set-run/call-log.jsonl --delay-ms 4500",
     "check": "npm run lint && npm run format:check && npm run typecheck && npm test && npm run test:contract"
   },
   "license": "UNLICENSED",

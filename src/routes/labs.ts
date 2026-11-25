@@ -39,6 +39,17 @@ async function requireTaLab(
 }
 
 export function registerLabRoutes(app: FastifyInstance, store: Store): void {
+  // GET /v1/labs — List labs visible to caller (FAQ-01 class isolation)
+  app.get("/v1/labs", async (req, reply) => {
+    const user = await authenticate(req, store);
+    if (!user) {
+      void reply.header("WWW-Authenticate", 'Bearer realm="leetkob"');
+      return sendProblem(reply, "unauthenticated", "A valid bearer token is required.");
+    }
+    const labs = await store.listLabsForUser(user);
+    return reply.code(200).send({ labs });
+  });
+
   // POST /v1/labs — TA creates a lab
   app.post("/v1/labs", async (req, reply) => {
     const user = await authenticate(req, store);
@@ -94,6 +105,9 @@ export function registerLabRoutes(app: FastifyInstance, store: Store): void {
     }
 
     if (user.role === "ta" && !(await store.isTaOfClass(user.id, lab.classId))) {
+      return sendProblem(reply, "not-found", "Lab not found in your classes.");
+    }
+    if (user.role === "student" && !(await store.isStudentOfClass(user.id, lab.classId))) {
       return sendProblem(reply, "not-found", "Lab not found in your classes.");
     }
 

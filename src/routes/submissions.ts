@@ -36,6 +36,10 @@ export function registerSubmissionRoutes(
       return sendProblem(reply, "not-found", "Lab not found.");
     }
 
+    if (user.role === "student" && !(await store.isStudentOfClass(user.id, lab.classId))) {
+      return sendProblem(reply, "not-found", "Lab not found.");
+    }
+
     // Theo FAQ-03: https://github.com/tkob-team/LeeTKOB-FAQ/blob/main/FAQ.md#faq-03
     if (now() > lab.closesAt) {
       return sendProblem(reply, "forbidden", "The submission window for this lab has closed.");

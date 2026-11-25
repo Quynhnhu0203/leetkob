@@ -80,7 +80,9 @@ export interface Submission {
 export interface Store {
   userByToken(token: string): Promise<User | undefined>;
   lab(labId: number): Promise<Lab | undefined>;
+  listLabsForUser(user: User): Promise<Lab[]>;
   isTaOfClass(userId: number, classId: number): Promise<boolean>;
+  isStudentOfClass(userId: number, classId: number): Promise<boolean>;
   publication(labId: number): Promise<Publication | undefined>;
   pendingReviewCount(labId: number): Promise<number>;
   publish(
@@ -226,8 +228,27 @@ export class InMemoryStore implements Store {
     return Promise.resolve(this.labs.get(labId));
   }
 
+  listLabsForUser(user: User): Promise<Lab[]> {
+    const all = Array.from(this.labs.values());
+    if (user.role === "admin") {
+      return Promise.resolve(all);
+    }
+    if (user.role === "ta") {
+      return Promise.resolve(
+        all.filter((lab) => this.classTas.get(lab.classId)?.has(user.id) ?? false),
+      );
+    }
+    return Promise.resolve(
+      all.filter((lab) => this.classStudents.get(lab.classId)?.has(user.id) ?? false),
+    );
+  }
+
   isTaOfClass(userId: number, classId: number): Promise<boolean> {
     return Promise.resolve(this.classTas.get(classId)?.has(userId) ?? false);
+  }
+
+  isStudentOfClass(userId: number, classId: number): Promise<boolean> {
+    return Promise.resolve(this.classStudents.get(classId)?.has(userId) ?? false);
   }
 
   publication(labId: number): Promise<Publication | undefined> {

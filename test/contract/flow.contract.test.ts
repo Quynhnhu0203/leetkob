@@ -158,6 +158,33 @@ describe("End-to-End Flow — Rubric Criterion 1", () => {
       payload: JSON.stringify({ input: "5\n3 1 4 1 5\n", expectedOutput: "1 1 3 4 5\n" }),
     });
 
+    // Step 1b: GET /v1/labs respects class ownership (ta_a sees lab, ta_b sees only class 2, stu1 sees class 1)
+    const taALabs = await app.inject({
+      method: "GET",
+      url: "/v1/labs",
+      headers: { authorization: "Bearer tok-ta-a" },
+    });
+    expect(taALabs.statusCode).toBe(200);
+    expect((taALabs.json<{ labs: Array<{ id: number }> }>().labs ?? []).map((l) => l.id)).toContain(
+      lab.id,
+    );
+
+    const taBLabs = await app.inject({
+      method: "GET",
+      url: "/v1/labs",
+      headers: { authorization: "Bearer tok-ta-b" },
+    });
+    expect(taBLabs.statusCode).toBe(200);
+    expect(
+      (taBLabs.json<{ labs: Array<{ id: number }> }>().labs ?? []).map((l) => l.id),
+    ).not.toContain(lab.id);
+
+    // Step 1c: Interactive UI includes FAQ-06 notice and HTML escaping against stored XSS
+    const uiRes = await app.inject({ method: "GET", url: "/ui" });
+    expect(uiRes.statusCode).toBe(200);
+    expect(uiRes.body).toContain("FAQ-06");
+    expect(uiRes.body).toContain("escapeHtml");
+
     // Step 2: As Student (stu1), submit compliant solution s01
     const sub1Res = await app.inject({
       method: "POST",
