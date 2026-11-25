@@ -133,12 +133,12 @@ with that date.
 
 ### Tools
 
-| Tool                                   | Used for                                                                                                                                                                                   |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Claude Code / Antigravity              | Architecture, Queue & Worker implementation, syntax-aware hard rules, Gemini model client, prompt stripper, limits guardrails, checker CLI, Dockerfiles, test suite, and PA3 documentation |
-| Google Gemini API (`gemini-3.8-flash`) | Semantic constraint reviews on dev set; real dev-set run committed with provider request ids, token counts, and cost                                                                       |
-| Docker                                 | Building and validating hardened sandbox image (`Dockerfile.sandbox`) and checker image (`Dockerfile.checker`)                                                                             |
-| Git & GitHub Actions CI                | Committing one part per commit, verifying CI workflows and branch protection on `main` and `pa*` tags                                                                                      |
+| Tool                                                    | Used for                                                                                                                                                                                   |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Claude Code / Antigravity                               | Architecture, Queue & Worker implementation, syntax-aware hard rules, Gemini model client, prompt stripper, limits guardrails, checker CLI, Dockerfiles, test suite, and PA3 documentation |
+| Google Gemini API (`gemini-3.8-flash` + fallback chain) | Semantic constraint reviews on dev set (`gemini-3.6-flash`, `gemini-3-flash-preview`, `gemini-3.5-flash-lite`); real 47-call run committed with provider request ids, tokens, and cost     |
+| Docker                                                  | Building and validating hardened sandbox image (`Dockerfile.sandbox`) and checker image (`Dockerfile.checker`)                                                                             |
+| Git & GitHub Actions CI                                 | Committing one part per commit, verifying CI workflows and branch protection on `main` and `pa*` tags                                                                                      |
 
 ### Changed / Rejected
 
@@ -171,3 +171,11 @@ During pre-submission verification, a strict audit caught several critical defec
 3. `src/routes/submissions.ts` invoked `worker.processNext()` directly inside `POST`, defeating worker pause/resume separation. We decoupled HTTP enqueue from `worker.start()` and added an API test verifying `status` stays `queued` while the worker is stopped.
 4. `src/reviewer/limits.ts` accepted `timeoutMs` without enforcing it, and `src/reviewer/hard-rules.ts` used `.includes()` inside macro bodies (`#define X before` falsely triggering `for`), lacked multi-level `std::ranges::` namespace tokens, and missed complex return types. All of these were tested red-first and fixed.
 5. `src/ui/html.ts` concatenated raw evidence lines into HTML (stored XSS risk) and lacked the `FAQ-06` submission notice and lab picker; fixed with `escapeHtml` and `GET /v1/labs`.
+
+### #17 — Empty env fallback, line-numbered prompts, and per-attempt fallback timeouts (Changed)
+
+Running the real dev-set evaluation against our `.env` uncovered three live integration bugs:
+
+1. **Empty `GEMINI_MODEL=` in `.env` (`404` bug):** `.env` left `GEMINI_MODEL=` blank, and `src/model/client.ts` used `??` instead of `||`, sending requests to `/v1beta/models/:generateContent`. Fixed `||` fallbacks across `client.ts`, `server.ts`, and `checker-cli.ts`, and ensured fresh CLI runs truncate stale logs cleanly.
+2. **Evidence line-number grounding:** Unnumbered code inside the prompt forced LLMs to count source lines manually, risking evidence line mismatch against `reviewConstraints` exact-line validation. Added 1-based line prefixes (`1 | ...`) in `src/model/prompt.ts` while stripping identity/comments verbatim.
+3. **Shared `AbortController` blocking fallback on timeout:** Under high load, `gemini-3.8-flash` timed out after 25s, aborting the shared `AbortSignal` before fallback models (`gemini-3.6-flash`, `gemini-3-flash-preview`, `gemini-flash-lite-latest`) could run. Refactored `GeminiModelClient.call` to give each candidate its own attempt timer inside the total `timeoutMs` budget (tested red-first in `test/unit/model.test.ts`). On Free Tier (20 RPD per model), resuming the 23 errored calls from Pass 1 through `runChecker` achieved `0` wrongful deductions, `100.0% (37/37)` recall, and `0.0% (0/102)` unsure rate (`$0.003809` total cost across 47 real API calls).

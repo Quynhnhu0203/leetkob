@@ -72,7 +72,10 @@ npm run eval:run
 node eval/eval.mjs --data eval --predictions dev-set-run/predictions.jsonl | tee dev-set-run/eval-report.txt
 ```
 
-- Output artifacts belong in `dev-set-run/` (`predictions.jsonl`, `eval-report.txt`, and `call-log.jsonl` containing real `prompt`s, Google provider request IDs, tokens, duration, and cost).
+- Output artifacts committed in `dev-set-run/`:
+  - [`dev-set-run/predictions.jsonl`](dev-set-run/predictions.jsonl) (102 pairs across 47 dev-set solutions)
+  - [`dev-set-run/call-log.jsonl`](dev-set-run/call-log.jsonl) (47 genuine Gemini calls with full sanitized 1-based line-numbered `prompt`s, Google `responseId`s, tokens, latency, and cost; `0` fake/missing IDs)
+  - [`dev-set-run/eval-report.txt`](dev-set-run/eval-report.txt) (`wrongful deductions: 0`, `recall: 100.0% (37/37)`, `unsure rate: 0.0% (0/102)` — **PASS**)
 
 ---
 
