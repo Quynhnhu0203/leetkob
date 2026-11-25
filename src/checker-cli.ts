@@ -13,7 +13,7 @@ export interface PredictionLine {
   evidence: Array<{ line: number; text: string }>;
 }
 
-const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_TIMEOUT_MS = 25_000;
 
 async function callWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -42,8 +42,13 @@ export async function runChecker(options: {
     options.modelOff ?? (process.env.MODEL_OFF === "1" || !process.env.GEMINI_API_KEY);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const logFilePath =
-    options.logFile ??
-    (process.env.LLM_CALL_LOG_PATH || path.resolve(process.cwd(), "call-log.jsonl"));
+    options.logFile ||
+    process.env.LLM_CALL_LOG_PATH ||
+    path.resolve(process.cwd(), "call-log.jsonl");
+
+  if (!modelOff && !options.modelClient) {
+    await fs.rm(logFilePath, { force: true });
+  }
 
   const client =
     options.modelClient ??

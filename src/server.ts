@@ -90,11 +90,11 @@ try {
   // .env optional in production / CI
 }
 
-const port = Number(process.env.PORT ?? 3000);
+const port = Number(process.env.PORT || 3000);
 const store = new InMemoryStore(DEFAULT_SEED);
 const queue = new InMemorySubmissionQueue();
 const modelClient = process.env.GEMINI_API_KEY
-  ? new GeminiModelClient({ logFilePath: process.env.LLM_CALL_LOG_PATH ?? "server-call-log.jsonl" })
+  ? new GeminiModelClient({ logFilePath: process.env.LLM_CALL_LOG_PATH || "server-call-log.jsonl" })
   : new OfflineFakeModelClient();
 
 // Separate background worker judging submissions from the queue

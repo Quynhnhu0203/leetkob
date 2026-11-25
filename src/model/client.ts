@@ -97,6 +97,7 @@ export class OfflineFakeModelClient implements ModelClient {
 export interface GeminiClientOptions {
   apiKey?: string | undefined;
   model?: string | undefined;
+  fallbackModel?: string | undefined;
   logFilePath?: string | undefined;
   timeoutMs?: number | undefined;
 }
@@ -104,13 +105,22 @@ export interface GeminiClientOptions {
 export class GeminiModelClient implements ModelClient {
   private readonly apiKey: string;
   private readonly model: string;
+  private readonly fallbackModel: string;
   private readonly logFilePath?: string | undefined;
   private readonly timeoutMs: number;
   private readonly callLog: CallLogEntry[] = [];
 
   constructor(options: GeminiClientOptions = {}) {
-    this.apiKey = options.apiKey ?? process.env.GEMINI_API_KEY ?? "";
-    this.model = options.model ?? process.env.GEMINI_MODEL ?? "gemini-3.8-flash";
+    this.apiKey = options.apiKey || process.env.GEMINI_API_KEY || "";
+    this.model = options.model || process.env.GEMINI_MODEL || "gemini-3.8-flash";
+    const envFallback = process.env.GEMINI_FALLBACK_MODEL;
+    const defaultFallback =
+      this.model === "gemini-3.8-flash"
+        ? "gemini-3.6-flash,gemini-3-flash-preview,gemini-flash-lite-latest"
+        : this.model === "gemini-3.6-flash"
+          ? "gemini-3-flash-preview,gemini-flash-lite-latest"
+          : "";
+    this.fallbackModel = options.fallbackModel ?? (envFallback || defaultFallback);
     this.logFilePath = options.logFilePath;
     this.timeoutMs = options.timeoutMs ?? 15000;
   }
@@ -123,15 +133,21 @@ export class GeminiModelClient implements ModelClient {
     }
   }
 
-  async call(params: ConstraintPromptParams, meta?: CallMetadata): Promise<ModelOutput> {
-    const prompt = buildModelPrompt(params);
-    const start = Date.now();
-
-    if (!this.apiKey) {
-      return { verdict: "unsure", evidence: [] };
-    }
-
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
+  private async callSingleModel(
+    modelName: string,
+    prompt: string,
+    signal: AbortSignal,
+  ): Promise<{
+    ok: boolean;
+    status: number;
+    requestId: string;
+    modelVersion: string;
+    rawResponse: string;
+    promptTokens: number;
+    candidatesTokens: number;
+    output: ModelOutput;
+  }> {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${this.apiKey}`;
     const payload = {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
@@ -140,133 +156,202 @@ export class GeminiModelClient implements ModelClient {
       },
     };
 
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal,
+    });
+
+    const headerReqId = res.headers.get("x-goog-request-id") ?? res.headers.get("x-request-id");
+    const rawBodyText = await res.text();
+
+    let data: {
+      responseId?: string;
+      modelVersion?: string;
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      usageMetadata?: {
+        promptTokenCount?: number;
+        candidatesTokenCount?: number;
+        totalTokenCount?: number;
+      };
+    } = {};
+    try {
+      data = JSON.parse(rawBodyText) as typeof data;
+    } catch {
+      // keep empty data
+    }
+
+    const requestId = headerReqId || data.responseId || `http-${res.status}-${Date.now()}`;
+    const modelVersion = data.modelVersion ?? modelName;
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        requestId,
+        modelVersion,
+        rawResponse: `HTTP ${res.status}: ${rawBodyText.slice(0, 500)}`,
+        promptTokens: Math.ceil(prompt.length / 4),
+        candidatesTokens: 0,
+        output: { verdict: "unsure", evidence: [] },
+      };
+    }
+
+    const rawResponse = data.candidates?.[0]?.content?.parts?.[0]?.text ?? rawBodyText;
+    const promptTokens = data.usageMetadata?.promptTokenCount ?? Math.ceil(prompt.length / 4);
+    const candidatesTokens =
+      data.usageMetadata?.candidatesTokenCount ?? Math.ceil(rawResponse.length / 4);
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawResponse);
+    } catch {
+      parsed = null;
+    }
+
+    let output: ModelOutput = { verdict: "unsure", evidence: [] };
+    const isEvidenceList = (arr: unknown[]): arr is EvidenceLine[] =>
+      arr.every(
+        (item) =>
+          typeof item === "object" &&
+          item !== null &&
+          !Array.isArray(item) &&
+          typeof (item as { line?: unknown }).line === "number" &&
+          Number.isInteger((item as { line: number }).line) &&
+          typeof (item as { text?: unknown }).text === "string",
+      );
+
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      "verdict" in parsed &&
+      typeof parsed.verdict === "string" &&
+      ["pass", "violation", "unsure"].includes(parsed.verdict) &&
+      "evidence" in parsed &&
+      Array.isArray(parsed.evidence) &&
+      isEvidenceList(parsed.evidence)
+    ) {
+      output = {
+        verdict: parsed.verdict as "pass" | "violation" | "unsure",
+        evidence: parsed.evidence,
+      };
+    }
+
+    return {
+      ok: true,
+      status: res.status,
+      requestId,
+      modelVersion,
+      rawResponse,
+      promptTokens,
+      candidatesTokens,
+      output,
+    };
+  }
+
+  async call(params: ConstraintPromptParams, meta?: CallMetadata): Promise<ModelOutput> {
+    const prompt = buildModelPrompt(params);
+    const start = Date.now();
+
+    if (!this.apiKey) {
+      return { verdict: "unsure", evidence: [] };
+    }
+
     const controller = new AbortController();
+    const deadline = Date.now() + this.timeoutMs;
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
-    let rawResponse = "";
-    let requestId = "";
-    let promptTokens = 0;
-    let candidatesTokens = 0;
-
     try {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
+      const candidates = [
+        this.model,
+        ...this.fallbackModel
+          .split(",")
+          .map((m) => m.trim())
+          .filter((m) => m.length > 0 && m !== this.model),
+      ];
+      let result: Awaited<ReturnType<GeminiModelClient["callSingleModel"]>> | undefined;
+      let lastError: Error | undefined;
 
-      const headerReqId = res.headers.get("x-goog-request-id") ?? res.headers.get("x-request-id");
-      const rawBodyText = await res.text();
+      // Give each candidate its own attempt timer inside the total timeoutMs budget
+      // so a hanging primary model still leaves time to fall back.
+      for (const [idx, candidateModel] of candidates.entries()) {
+        if (controller.signal.aborted) break;
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 200) break;
 
-      let data: {
-        responseId?: string;
-        modelVersion?: string;
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-        usageMetadata?: {
-          promptTokenCount?: number;
-          candidatesTokenCount?: number;
-          totalTokenCount?: number;
-        };
-      } = {};
-      try {
-        data = JSON.parse(rawBodyText) as typeof data;
-      } catch {
-        rawResponse = rawBodyText;
+        const isLast = idx === candidates.length - 1;
+        const attemptMs = isLast
+          ? remainingMs
+          : Math.min(remainingMs, Math.max(100, Math.floor(remainingMs * 0.45)));
+        const attemptController = new AbortController();
+        const onParentAbort = (): void => attemptController.abort();
+        controller.signal.addEventListener("abort", onParentAbort, { once: true });
+        const attemptTimeout = setTimeout(() => attemptController.abort(), attemptMs);
+
+        try {
+          const attemptResult = await this.callSingleModel(
+            candidateModel,
+            prompt,
+            attemptController.signal,
+          );
+          result = attemptResult;
+          lastError = undefined;
+          const retryable =
+            !attemptResult.ok &&
+            (!attemptResult.status ||
+              attemptResult.status === 503 ||
+              attemptResult.status === 429 ||
+              attemptResult.status === 404 ||
+              attemptResult.status >= 500);
+          if (!retryable || isLast || controller.signal.aborted) {
+            break;
+          }
+        } catch (err) {
+          lastError = err instanceof Error ? err : new Error(String(err));
+          if (isLast || controller.signal.aborted) {
+            throw lastError;
+          }
+        } finally {
+          clearTimeout(attemptTimeout);
+          controller.signal.removeEventListener("abort", onParentAbort);
+        }
       }
 
-      requestId = headerReqId || data.responseId || `http-${res.status}-${Date.now()}`;
-
-      if (!res.ok) {
-        const durationMs = Date.now() - start;
-        const output: ModelOutput = { verdict: "unsure", evidence: [] };
-        await this.appendCallLog({
-          timestamp: new Date().toISOString(),
-          requestId,
-          model: data.modelVersion ?? this.model,
-          solution: meta?.solution,
-          constraint: meta?.constraint ?? params.constraint.id,
-          promptTokens: Math.ceil(prompt.length / 4),
-          candidatesTokens: 0,
-          totalTokens: Math.ceil(prompt.length / 4),
-          durationMs,
-          costUsd: 0,
-          prompt,
-          rawResponse: `HTTP ${res.status}: ${rawBodyText.slice(0, 500)}`,
-          parsedOutput: output,
-        });
-        return output;
-      }
-
-      rawResponse = data.candidates?.[0]?.content?.parts?.[0]?.text ?? rawBodyText;
-      promptTokens = data.usageMetadata?.promptTokenCount ?? Math.ceil(prompt.length / 4);
-      candidatesTokens =
-        data.usageMetadata?.candidatesTokenCount ?? Math.ceil(rawResponse.length / 4);
-
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(rawResponse);
-      } catch {
-        parsed = null;
-      }
-
-      // Strict schema validation without silent array coercion
-      let output: ModelOutput = { verdict: "unsure", evidence: [] };
-      const isEvidenceList = (arr: unknown[]): arr is EvidenceLine[] =>
-        arr.every(
-          (item) =>
-            typeof item === "object" &&
-            item !== null &&
-            !Array.isArray(item) &&
-            typeof (item as { line?: unknown }).line === "number" &&
-            Number.isInteger((item as { line: number }).line) &&
-            typeof (item as { text?: unknown }).text === "string",
-        );
-
-      if (
-        typeof parsed === "object" &&
-        parsed !== null &&
-        !Array.isArray(parsed) &&
-        "verdict" in parsed &&
-        typeof parsed.verdict === "string" &&
-        ["pass", "violation", "unsure"].includes(parsed.verdict) &&
-        "evidence" in parsed &&
-        Array.isArray(parsed.evidence) &&
-        isEvidenceList(parsed.evidence)
-      ) {
-        output = {
-          verdict: parsed.verdict as "pass" | "violation" | "unsure",
-          evidence: parsed.evidence,
-        };
+      if (!result) {
+        if (lastError !== undefined) throw lastError;
+        throw new Error("This operation was aborted");
       }
 
       const durationMs = Date.now() - start;
       // Cost arithmetic: $0.075 / 1M input tokens, $0.30 / 1M output tokens
-      const costUsd = (promptTokens * 0.075) / 1_000_000 + (candidatesTokens * 0.3) / 1_000_000;
+      const costUsd =
+        (result.promptTokens * 0.075) / 1_000_000 + (result.candidatesTokens * 0.3) / 1_000_000;
 
       await this.appendCallLog({
         timestamp: new Date().toISOString(),
-        requestId,
-        model: data.modelVersion ?? this.model,
+        requestId: result.requestId,
+        model: result.modelVersion,
         solution: meta?.solution,
         constraint: meta?.constraint ?? params.constraint.id,
-        promptTokens,
-        candidatesTokens,
-        totalTokens: promptTokens + candidatesTokens,
+        promptTokens: result.promptTokens,
+        candidatesTokens: result.candidatesTokens,
+        totalTokens: result.promptTokens + result.candidatesTokens,
         durationMs,
         costUsd,
         prompt,
-        rawResponse,
-        parsedOutput: output,
+        rawResponse: result.rawResponse,
+        parsedOutput: result.output,
       });
 
-      return output;
+      return result.output;
     } catch (err) {
       const durationMs = Date.now() - start;
       const errMsg = err instanceof Error ? err.message : "ERROR / TIMEOUT";
       await this.appendCallLog({
         timestamp: new Date().toISOString(),
-        requestId: requestId || `err-${Date.now()}`,
+        requestId: `err-${Date.now()}`,
         model: this.model,
         solution: meta?.solution,
         constraint: meta?.constraint ?? params.constraint.id,

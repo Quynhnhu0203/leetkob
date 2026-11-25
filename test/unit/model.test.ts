@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { stripCodeForModel } from "../../src/model/stripper.js";
 import { buildModelPrompt } from "../../src/model/prompt.js";
-import { OfflineFakeModelClient } from "../../src/model/client.js";
+import { GeminiModelClient, OfflineFakeModelClient } from "../../src/model/client.js";
 import { runChecker } from "../../src/checker-cli.js";
 
 describe("Model Stripper — Identity and Comment Sanitization", () => {
@@ -84,6 +84,91 @@ describe("Model Call Log and Cost Arithmetic", () => {
     expect(log[0]?.promptTokens).toBeGreaterThan(0);
     expect(log[0]?.totalTokens).toBeGreaterThan(0);
     expect(log[0]?.parsedOutput?.verdict).toBe("pass");
+  });
+
+  it("falls back to fallbackModel when primary model returns HTTP 503 (without real network)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("busy", { status: 503 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            responseId: "provider-req-xyz",
+            modelVersion: "gemini-3.6-flash",
+            candidates: [{ content: { parts: [{ text: '{"verdict":"pass","evidence":[]}' }] } }],
+            usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 20 },
+          }),
+          { status: 200 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const client = new GeminiModelClient({
+        apiKey: "fake-key-test",
+        model: "gemini-3.8-flash",
+        fallbackModel: "gemini-3.6-flash",
+      });
+      const out = await client.call({
+        statement: "Sort",
+        constraint: { id: "C2", text: "Merge sort" },
+        code: "int main(){}",
+      });
+      expect(out).toEqual({ verdict: "pass", evidence: [] });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const entry = client.getCallLog()[0];
+      expect(entry?.requestId).toBe("provider-req-xyz");
+      expect(entry?.model).toBe("gemini-3.6-flash");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("falls back through multi-model chain when primary times out and second hits 429", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("Aborted", "AbortError")),
+              { once: true },
+            );
+          }),
+      )
+      .mockResolvedValueOnce(new Response("quota exceeded", { status: 429 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            responseId: "provider-req-fallback-after-timeout",
+            modelVersion: "gemini-3-flash-preview",
+            candidates: [{ content: { parts: [{ text: '{"verdict":"pass","evidence":[]}' }] } }],
+            usageMetadata: { promptTokenCount: 90, candidatesTokenCount: 15 },
+          }),
+          { status: 200 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const client = new GeminiModelClient({
+        apiKey: "fake-key-test",
+        model: "gemini-3.8-flash",
+        fallbackModel: "gemini-3.6-flash,gemini-3-flash-preview",
+        timeoutMs: 800,
+      });
+      const out = await client.call({
+        statement: "Sort",
+        constraint: { id: "C2", text: "Merge sort" },
+        code: "int main(){}",
+      });
+      expect(out).toEqual({ verdict: "pass", evidence: [] });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      const entry = client.getCallLog()[0];
+      expect(entry?.requestId).toBe("provider-req-fallback-after-timeout");
+      expect(entry?.model).toBe("gemini-3-flash-preview");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
