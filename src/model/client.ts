@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { buildModelPrompt, type ConstraintPromptParams } from "./prompt.js";
+import { costUsd } from "./pricing.js";
 
 export interface EvidenceLine {
   line: number;
@@ -25,6 +26,8 @@ export interface CallLogEntry {
   constraint?: string | undefined;
   promptTokens: number;
   candidatesTokens: number;
+  /** Thinking tokens (usageMetadata.thoughtsTokenCount), billed at the output rate. */
+  thoughtsTokens?: number | undefined;
   totalTokens: number;
   durationMs: number;
   costUsd: number;
@@ -100,6 +103,8 @@ export interface GeminiClientOptions {
   fallbackModel?: string | undefined;
   logFilePath?: string | undefined;
   timeoutMs?: number | undefined;
+  /** Clock used to pick the price in force (tests pin it). */
+  now?: (() => Date) | undefined;
 }
 
 export class GeminiModelClient implements ModelClient {
@@ -108,6 +113,7 @@ export class GeminiModelClient implements ModelClient {
   private readonly fallbackModel: string;
   private readonly logFilePath?: string | undefined;
   private readonly timeoutMs: number;
+  private readonly now: () => Date;
   private readonly callLog: CallLogEntry[] = [];
 
   constructor(options: GeminiClientOptions = {}) {
@@ -123,6 +129,7 @@ export class GeminiModelClient implements ModelClient {
     this.fallbackModel = options.fallbackModel ?? (envFallback || defaultFallback);
     this.logFilePath = options.logFilePath;
     this.timeoutMs = options.timeoutMs ?? 15000;
+    this.now = options.now ?? (() => new Date());
   }
 
   private async appendCallLog(entry: CallLogEntry): Promise<void> {
@@ -145,6 +152,7 @@ export class GeminiModelClient implements ModelClient {
     rawResponse: string;
     promptTokens: number;
     candidatesTokens: number;
+    thoughtsTokens: number;
     output: ModelOutput;
   }> {
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${this.apiKey}`;
@@ -173,6 +181,7 @@ export class GeminiModelClient implements ModelClient {
       usageMetadata?: {
         promptTokenCount?: number;
         candidatesTokenCount?: number;
+        thoughtsTokenCount?: number;
         totalTokenCount?: number;
       };
     } = {};
@@ -194,6 +203,7 @@ export class GeminiModelClient implements ModelClient {
         rawResponse: `HTTP ${res.status}: ${rawBodyText.slice(0, 500)}`,
         promptTokens: Math.ceil(prompt.length / 4),
         candidatesTokens: 0,
+        thoughtsTokens: 0,
         output: { verdict: "unsure", evidence: [] },
       };
     }
@@ -202,6 +212,7 @@ export class GeminiModelClient implements ModelClient {
     const promptTokens = data.usageMetadata?.promptTokenCount ?? Math.ceil(prompt.length / 4);
     const candidatesTokens =
       data.usageMetadata?.candidatesTokenCount ?? Math.ceil(rawResponse.length / 4);
+    const thoughtsTokens = data.usageMetadata?.thoughtsTokenCount ?? 0;
 
     let parsed: unknown;
     try {
@@ -247,6 +258,7 @@ export class GeminiModelClient implements ModelClient {
       rawResponse,
       promptTokens,
       candidatesTokens,
+      thoughtsTokens,
       output,
     };
   }
@@ -325,9 +337,14 @@ export class GeminiModelClient implements ModelClient {
       }
 
       const durationMs = Date.now() - start;
-      // Cost arithmetic: $0.075 / 1M input tokens, $0.30 / 1M output tokens
-      const costUsd =
-        (result.promptTokens * 0.075) / 1_000_000 + (result.candidatesTokens * 0.3) / 1_000_000;
+      // Priced by the model that answered (a fallback may have); thinking tokens bill as output.
+      const outputTokens = result.candidatesTokens + result.thoughtsTokens;
+      const callCostUsd = costUsd(
+        result.modelVersion,
+        result.promptTokens,
+        outputTokens,
+        this.now(),
+      );
 
       await this.appendCallLog({
         timestamp: new Date().toISOString(),
@@ -337,9 +354,10 @@ export class GeminiModelClient implements ModelClient {
         constraint: meta?.constraint ?? params.constraint.id,
         promptTokens: result.promptTokens,
         candidatesTokens: result.candidatesTokens,
-        totalTokens: result.promptTokens + result.candidatesTokens,
+        thoughtsTokens: result.thoughtsTokens,
+        totalTokens: result.promptTokens + outputTokens,
         durationMs,
-        costUsd,
+        costUsd: callCostUsd,
         prompt,
         rawResponse: result.rawResponse,
         parsedOutput: result.output,
