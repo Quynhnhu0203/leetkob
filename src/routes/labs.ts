@@ -145,6 +145,15 @@ export function registerLabRoutes(app: FastifyInstance, store: Store): void {
       );
     }
 
+    const existing = await store.getConstraints(found.lab.id);
+    if (existing.some((c) => c.id === body.id)) {
+      return sendProblem(
+        reply,
+        "validation",
+        "A constraint with this id already exists in the lab.",
+      );
+    }
+
     const constraint: Constraint = {
       id: body.id,
       text: body.text,
@@ -159,17 +168,23 @@ export function registerLabRoutes(app: FastifyInstance, store: Store): void {
     const found = await requireTaLab(req, reply, store);
     if (!found) return reply;
 
-    let body: { input?: string; expectedOutput?: string };
+    let parsed: unknown;
     try {
-      const parsed: unknown = JSON.parse(typeof req.body === "string" ? req.body : "{}");
-      body = parsed as { input?: string; expectedOutput?: string };
+      parsed = JSON.parse(typeof req.body === "string" ? req.body : "{}");
     } catch {
       return sendProblem(reply, "invalid-json", "Malformed JSON body.");
     }
+    const body: { input?: unknown; expectedOutput?: unknown } =
+      typeof parsed === "object" && parsed !== null ? parsed : {};
+
+    // A missing field must not become an empty test that every program passes.
+    if (typeof body.input !== "string" || typeof body.expectedOutput !== "string") {
+      return sendProblem(reply, "validation", "input and expectedOutput must both be strings.");
+    }
 
     const t = await store.addTest(found.lab.id, {
-      input: body.input ?? "",
-      expectedOutput: body.expectedOutput ?? "",
+      input: body.input,
+      expectedOutput: body.expectedOutput,
     });
     return reply.code(201).send(t);
   });
