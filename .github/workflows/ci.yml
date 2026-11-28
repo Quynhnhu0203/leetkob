@@ -75,6 +75,42 @@ jobs:
           REQUIRE_DOCKER: "1"
         run: npm run test:sandbox
 
+  # The marking run of the rubric ("What we run when marking", step 3): the checker image, model
+  # off, no network, memory and process limits, on a dataset folder. The image sees only
+  # problems/ and solutions/ (no labels.jsonl), so it cannot read the answers.
+  checker-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - name: Build checker image
+        run: docker build -f Dockerfile.checker -t leetkob-checker .
+      - name: Run checker image, model off, network none (dev set and our own cases)
+        run: |
+          for set in eval eval-own; do
+            blind="$RUNNER_TEMP/$set-blind"; out="$RUNNER_TEMP/$set-out"
+            mkdir -p "$blind" "$out" && chmod 777 "$out"
+            cp -r "$set/problems" "$set/solutions" "$blind/"
+            timeout 600 docker run --rm --network none --memory 1g --pids-limit 256 \
+              -e MODEL_OFF=1 \
+              -v "$blind:/data:ro" -v "$out:/out" \
+              leetkob-checker --data /data --output /out/predictions.jsonl
+          done
+      - name: Score with eval.mjs (exit 0 or 1 is a valid file; 2 is not) and require 0 wrongful deductions
+        run: |
+          for set in eval eval-own; do
+            out="$RUNNER_TEMP/$set-out"
+            code=0
+            node eval/eval.mjs --data "$set" --predictions "$out/predictions.jsonl" > "$out/report.txt" || code=$?
+            cat "$out/report.txt"
+            if [ "$code" -ne 0 ] && [ "$code" -ne 1 ]; then
+              echo "::error::$set: eval.mjs exited $code: the prediction file is invalid"; exit 1
+            fi
+            grep -Eq '^ *wrongful deductions +0 ' "$out/report.txt" \
+              || { echo "::error::$set: model-off run has wrongful deductions"; exit 1; }
+          done
+
   secrets:
     runs-on: ubuntu-latest
     steps:
