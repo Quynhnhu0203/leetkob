@@ -5,6 +5,7 @@ import path from "node:path";
 import { stripCodeForModel } from "../../src/model/stripper.js";
 import { buildModelPrompt } from "../../src/model/prompt.js";
 import { GeminiModelClient, OfflineFakeModelClient } from "../../src/model/client.js";
+import { costUsd, priceFor } from "../../src/model/pricing.js";
 import { runChecker } from "../../src/checker-cli.js";
 
 describe("Model Stripper — Identity and Comment Sanitization", () => {
@@ -58,6 +59,72 @@ int main() {}`,
     // Checks schema instructions
     expect(prompt).toContain('"verdict": "pass" | "violation" | "unsure"');
     expect(prompt).toContain('"evidence"');
+  });
+});
+
+describe("Model prices (Gemini Developer API, paid tier, Standard, USD per 1M tokens)", () => {
+  const nov2026 = new Date("2026-11-28T00:00:00Z");
+  const jan2027 = new Date("2027-01-02T00:00:00Z");
+
+  it.each([
+    ["gemini-3.8-flash", nov2026, 0.75, 3.75],
+    ["gemini-3.8-flash", jan2027, 1.5, 7.5],
+    ["gemini-3.6-flash", nov2026, 0.75, 3.75],
+    ["gemini-3.6-flash", jan2027, 1.5, 7.5],
+    ["gemini-3-flash-preview", nov2026, 0.5, 3.0],
+    ["gemini-3.5-flash-lite", nov2026, 0.3, 2.5],
+  ])("%s on %s: input %d, output %d", (model, at, input, output) => {
+    expect(priceFor(model, at)).toEqual({ known: true, inputPerM: input, outputPerM: output });
+  });
+
+  it("prices an unknown model at the dearest known rate, so a cost is never understated", () => {
+    const p = priceFor("gemini-9-ultra", nov2026);
+    expect(p.known).toBe(false);
+    expect(p.inputPerM).toBeGreaterThanOrEqual(1.5);
+    expect(p.outputPerM).toBeGreaterThanOrEqual(7.5);
+  });
+
+  it("charges thinking tokens at the output rate", () => {
+    // 1000 in × 0.75 + (40 out + 200 thinking) × 3.75, per 1M
+    expect(costUsd("gemini-3.8-flash", 1000, 240, nov2026)).toBeCloseTo(0.00165, 10);
+  });
+
+  it("logs thinking tokens and prices the call by the model that answered", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          responseId: "provider-req-cost",
+          modelVersion: "gemini-3.8-flash",
+          candidates: [{ content: { parts: [{ text: '{"verdict":"pass","evidence":[]}' }] } }],
+          usageMetadata: {
+            promptTokenCount: 1000,
+            candidatesTokenCount: 40,
+            thoughtsTokenCount: 200,
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const client = new GeminiModelClient({
+        apiKey: "fake-key-test",
+        model: "gemini-3.8-flash",
+        fallbackModel: "",
+        now: () => nov2026,
+      });
+      await client.call({
+        statement: "Sort",
+        constraint: { id: "C2", text: "Merge sort" },
+        code: "int main(){}",
+      });
+      const entry = client.getCallLog()[0];
+      expect(entry?.thoughtsTokens).toBe(200);
+      expect(entry?.totalTokens).toBe(1240);
+      expect(entry?.costUsd).toBeCloseTo(0.00165, 10);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
