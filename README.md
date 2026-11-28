@@ -72,18 +72,44 @@ the whole history with gitleaks on every PR.
 
 ## Model
 
-- **Provider and model:** Google Gemini API, free tier, model `gemini-3.8-flash` (set in
-  `GEMINI_MODEL`). Used for semantic constraints only (hard rules decide ban lists without calling the model).
+- **Provider and model:** Google Gemini API, free tier. Primary model `gemini-3.8-flash` (set in
+  `GEMINI_MODEL`); when it times out or answers 429/5xx the client falls back, in order, to
+  `gemini-3.6-flash`, `gemini-3-flash-preview`, `gemini-flash-lite-latest` (which answers as
+  `gemini-3.5-flash-lite`). Every call log entry names the model that actually answered. Used for
+  semantic constraints only (hard rules decide ban lists without calling the model).
+- **Models in the committed dev-set run** ([`dev-set-run/`](dev-set-run/)): `gemini-3.8-flash`
+  timed out or hit the free-tier daily quota, so the 47 answers came from `gemini-3.6-flash` (24),
+  `gemini-3-flash-preview` (18) and `gemini-3.5-flash-lite` (5).
 - **Spending cap:** the key belongs to a Google AI Studio project with **no billing account
   attached** (checked in AI Studio on 2026-11-07), so it can only use free-tier quota and cannot
   incur charges: the cap is 0 VND. Per-lab cap `LLM_MAX_CALLS_PER_LAB` is enforced in code ([`src/reviewer/limits.ts`](src/reviewer/limits.ts)).
-- **Cost estimate for one lab of 80 submissions (with arithmetic):**
-  - Ban-list constraints (e.g. `C1: Do not call ...`) are decided locally by hard rules (0 calls).
-  - Assuming 1 semantic constraint per submission (e.g. `C2`), volume = 80 submissions × 1 = 80 calls.
-  - Typical prompt size ≈ 750 input tokens (statement + constraint + stripped code); response ≈ 60 output tokens (JSON verdict + evidence line).
-  - Input: 80 × 750 = 60,000 tokens × \$0.075 / 1M = \$0.0045 (~115 VND).
-  - Output: 80 × 60 = 4,800 tokens × \$0.30 / 1M = \$0.00144 (~37 VND).
-  - **Total estimated cost for 1 lab = \$0.0059 (~152 VND)**, or **0 VND** on Google AI Studio free tier.
+- **Prices used** (Gemini Developer API, paid tier, Standard, USD per 1M tokens, from
+  [aistudio.google.com/docs/pricing](https://aistudio.google.com/docs/pricing), read 2026-11-28;
+  output includes thinking tokens; coded in [`src/model/pricing.ts`](src/model/pricing.ts)):
+
+  | Model                                  | Input                       | Output                      |
+  | -------------------------------------- | --------------------------- | --------------------------- |
+  | `gemini-3.8-flash`, `gemini-3.6-flash` | 0.75 (1.50 from 2027-01-01) | 3.75 (7.50 from 2027-01-01) |
+  | `gemini-3-flash-preview`               | 0.50                        | 3.00                        |
+  | `gemini-3.5-flash-lite`                | 0.30                        | 2.50                        |
+
+- **Cost of one lab of 80 submissions (with arithmetic):**
+  - Ban-list constraints (e.g. `C1: Do not call ...`) are decided by hard rules: 0 calls.
+  - One call per semantic constraint per Accepted submission. `sort-merge` has one (`C2`), so at
+    most 80 × 1 = 80 calls (fewer if some submissions are not Accepted). With _k_ semantic
+    constraints, multiply by _k_.
+  - Tokens per call, measured on the 47 calls of the committed run: 933.8 input, 36.7 output on
+    average; we round to 934 and 37.
+  - Input: 80 × 934 = 74,720 tokens × \$0.75 / 1M = \$0.05604.
+  - Output: 80 × 37 = 2,960 tokens × \$3.75 / 1M = \$0.01110.
+  - **Total with `gemini-3.8-flash`: \$0.0671 per lab** (≈ 1,750 VND at 26,000 VND/USD);
+    \$0.1343 from 2027-01-01, when the promotional rate ends.
+  - Thinking tokens are billed as output, and the committed run did not record them (the client
+    read `thoughtsTokenCount` only from 2026-11-28). If each call thought for 500 tokens, output
+    would be 80 × 537 = 42,960 tokens × \$3.75 / 1M = \$0.1611 and the lab \$0.2171.
+  - **What we pay: 0 VND.** The key's project has no billing account, so it can only use the
+    free tier (see Spending cap); the figures above are what the same calls would cost on the
+    paid tier.
 - **Limits and human gate:**
   - Model output is checked against a strict JSON schema; malformed output or mismatched evidence becomes `unsure` ([FAQ-09](https://github.com/tkob-team/LeeTKOB-FAQ/blob/main/FAQ.md#faq-09)).
   - Timeouts and cost-cap overruns become `unsure`.
