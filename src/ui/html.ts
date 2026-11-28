@@ -1,3 +1,5 @@
+import { CLIENT_HELPERS } from "./client-helpers.js";
+
 export function renderAppHtml(): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -101,17 +103,11 @@ export function renderAppHtml(): string {
   </main>
 
   <script>
+${CLIENT_HELPERS}
+    const POLL_INTERVAL_MS = 800;
+    const POLL_MAX_ATTEMPTS = 150; // about 2 minutes
     let activeToken = 'tok-ta-a';
-    let currentLabId = 1;
-
-    function escapeHtml(str) {
-      return String(str ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-    }
+    let currentLabId = null;
 
     const S01_CODE = \`#include <iostream>
 using namespace std;
@@ -175,6 +171,8 @@ int main() {
     async function refreshLabs(preferredId) {
       const select = document.getElementById('labSelect');
       const res = await fetch('/v1/labs', { headers: { 'Authorization': 'Bearer ' + activeToken } });
+      // Never keep the previous user's lab id: a user only works on labs the server lists for them.
+      currentLabId = null;
       if (!res.ok) {
         select.innerHTML = '';
         return;
@@ -184,13 +182,8 @@ int main() {
       select.innerHTML = labs.map(l =>
         '<option value="' + escapeHtml(l.id) + '">#' + escapeHtml(l.id) + ' — ' + escapeHtml(l.name || 'Lab') + '</option>'
       ).join('');
-      if (labs.length > 0) {
-        const chosen = preferredId && labs.some(l => l.id === Number(preferredId))
-          ? Number(preferredId)
-          : labs[labs.length - 1].id;
-        currentLabId = chosen;
-        select.value = String(chosen);
-      }
+      currentLabId = pickLabId(labs, preferredId);
+      if (currentLabId !== null) select.value = String(currentLabId);
     }
 
     async function loadSelectedLabDetails() {
@@ -303,44 +296,66 @@ int main() {
     async function submitStudentCode() {
       const code = document.getElementById('codeEditor').value;
       if (!code) { alert('Please enter code'); return; }
+      const resultEl = document.getElementById('submissionResult');
+      if (currentLabId === null) {
+        resultEl.innerHTML = '<p style="color:red;">No lab is open in your class yet.</p>';
+        return;
+      }
 
-      document.getElementById('submissionResult').innerHTML = '<p>Submitting to queue...</p>';
+      resultEl.innerHTML = '<p>Submitting to queue...</p>';
       const res = await fetch('/v1/labs/' + currentLabId + '/submissions', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + activeToken, 'Content-Type': 'application/json' },
         body: JSON.stringify({ code })
       });
       const data = await res.json();
-      if (res.ok) {
-        const subId = data.id;
-        document.getElementById('submissionResult').innerHTML =
-          '<p>Submission #' + escapeHtml(subId) + ' status: <strong class="badge badge-unsure">queued</strong> (waiting for worker judge...)</p>';
+      if (!res.ok) {
+        resultEl.innerHTML = '<p style="color:red;">Error: ' + escapeHtml(data.detail || data.title || res.status) + '</p>';
+        return;
+      }
 
-        const interval = setInterval(async () => {
-          const sRes = await fetch('/v1/submissions/' + subId, {
+      const subId = data.id;
+      resultEl.innerHTML =
+        '<p>Submission #' + escapeHtml(subId) + ' status: <strong class="badge badge-unsure">queued</strong> (waiting for worker judge...)</p>';
+
+      // Poll until judged, an error, or the time limit; never poll forever.
+      let attempts = 0;
+      const interval = setInterval(async () => {
+        attempts++;
+        const fail = (msg) => {
+          clearInterval(interval);
+          resultEl.innerHTML = '<p style="color:red;">Submission #' + escapeHtml(subId) + ': ' + escapeHtml(msg) + '</p>';
+        };
+        try {
+          const sRes = await fetch('/v1/submissions/' + encodeURIComponent(subId), {
             headers: { 'Authorization': 'Bearer ' + activeToken }
           });
-          if (sRes.ok) {
-            const sub = await sRes.json();
-            if (sub.status === 'judged') {
-              clearInterval(interval);
-              document.getElementById('submissionResult').innerHTML =
-                '<div>' +
-                  '<h4>Submission #' + escapeHtml(sub.id) + ' Judged!</h4>' +
-                  '<p>Status: <span class="badge badge-pass">' + escapeHtml(sub.status) + '</span> | Test Verdict: <span class="badge badge-ac">' + escapeHtml(sub.testVerdict || 'AC') + '</span></p>' +
-                  '<p><small><em>Notice (<a href="https://github.com/tkob-team/LeeTKOB-FAQ/blob/main/FAQ.md#faq-08" target="_blank" rel="noopener">FAQ-08</a>): Constraint review verdicts remain hidden until the TA publishes marks.</em></small></p>' +
-                '</div>';
-            }
+          if (!sRes.ok) return fail('could not read status (HTTP ' + sRes.status + ').');
+          const sub = await sRes.json();
+          if (sub.status === 'judged') {
+            clearInterval(interval);
+            const badge = testVerdictBadge(sub.testVerdict);
+            resultEl.innerHTML =
+              '<div>' +
+                '<h4>Submission #' + escapeHtml(sub.id) + ' Judged!</h4>' +
+                '<p>Status: <span class="badge badge-pass">' + escapeHtml(sub.status) + '</span> | Test Verdict: <span class="badge ' + badge.cls + '">' + escapeHtml(badge.label) + '</span></p>' +
+                '<p><small><em>Notice (<a href="https://github.com/tkob-team/LeeTKOB-FAQ/blob/main/FAQ.md#faq-08" target="_blank" rel="noopener">FAQ-08</a>): Constraint review verdicts remain hidden until the TA publishes marks.</em></small></p>' +
+              '</div>';
+          } else if (attempts >= POLL_MAX_ATTEMPTS) {
+            fail('still not judged after 2 minutes. Ask your TA to check the judge worker.');
           }
-        }, 800);
-      } else {
-        document.getElementById('submissionResult').innerHTML =
-          '<p style="color:red;">Error: ' + escapeHtml(data.detail || JSON.stringify(data)) + '</p>';
-      }
+        } catch (err) {
+          fail('network error while checking status.');
+        }
+      }, POLL_INTERVAL_MS);
     }
 
     async function fetchReviewQueue() {
       const el = document.getElementById('reviewQueueContainer');
+      if (currentLabId === null) {
+        el.innerHTML = '<p><em>No lab in your class yet. Create one above.</em></p>';
+        return;
+      }
       const res = await fetch('/v1/labs/' + currentLabId + '/reviews', {
         headers: { 'Authorization': 'Bearer ' + activeToken }
       });
@@ -424,6 +439,10 @@ int main() {
     }
 
     async function publishLab() {
+      if (currentLabId === null) {
+        document.getElementById('publishStatus').innerHTML = '<span style="color:red;">No lab in this class to publish.</span>';
+        return;
+      }
       const res = await fetch('/v1/labs/' + currentLabId + '/publish', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + activeToken, 'Content-Type': 'application/json' },
