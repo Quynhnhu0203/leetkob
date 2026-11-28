@@ -10,7 +10,6 @@ COPY package*.json tsconfig.json tsconfig.build.json ./
 RUN npm ci
 
 COPY src/ ./src/
-COPY eval/problems/sort-merge/tests/ ./eval/problems/sort-merge/tests/
 RUN npm run build && npm prune --omit=dev
 
 EXPOSE 3000
